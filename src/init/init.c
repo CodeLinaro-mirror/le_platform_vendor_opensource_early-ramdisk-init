@@ -165,7 +165,6 @@ static void mount_unsetup(void)
 	umount("/proc");
 	umount("/sys");
 	umount("/dev");
-	umount(LOG_DIR);
 }
 
 int main(int argc, char* argv[])
@@ -185,7 +184,7 @@ int main(int argc, char* argv[])
 	if(ret < 0)
 		log_kmsg("open log file: %s fail!\n", LOG_PATH);
 
-	write_marker("early-ramdisk-init-start-up");
+	write_marker("E - early-ramdisk start up");
 	log_kmsg("start\n");
 
 	ret = rootfs_cmd_setup(root, fstype, &flag, init);
@@ -193,6 +192,8 @@ int main(int argc, char* argv[])
 		return ret;
 
 	fast_modules_load();
+	write_marker("E - early-ramdisk modules done");
+	log_kmsg("load modules done\n", init);
 
 	log_kmsg("root device: %s, fstype: %s, - 0x%X\n", root, fstype, flag);
 	log_kmsg("Run %s as rootfs init\n", init);
@@ -204,7 +205,7 @@ int main(int argc, char* argv[])
 
 	snprintf(real_log, CMD_MAX, "/realroot%s", LOG_DIR);
 	if(mount(LOG_DIR, real_log, "bind", MS_BIND | MS_REC, NULL))
-		log_kmsg("mount early-ramdisk-init logfs failed: %d\n", errno);
+		log_kmsg("mount %s logfs failed: %d\n", real_log, errno);
 
 	if(chroot("/realroot")) {
 		log_kmsg("chroot rootfs failed: %d\n", errno);
