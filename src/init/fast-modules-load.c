@@ -157,7 +157,7 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 		if(fd < 0) {
 			fd = open(init_path, O_RDONLY | O_CLOEXEC);
 			if(fd < 0) {
-				log_debug("could not init file: %s\n", init_path);
+				log_debug("could not find init file: %s\n", init_path);
 				count++;
 				usleep(2000);
 				continue;
@@ -186,7 +186,7 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 	}
 
 	if(count) {
-		log_warn("depend check wait %d times!!!\n", count);
+		log_warn("depend check wait %s %d times!!!\n", module, count);
 		if(count == DEPEND_CHECK_MAX)
 			ret = -ETIMEDOUT;
 	}
@@ -201,7 +201,6 @@ static void thread_modules_load(void *arg1, void *arg2)
 	char *name = (char *)arg2;
 	char line[MODULE_LINE_MAX + PATH_PAD] = {0};
 	char *pline;
-	int depend_check = 1;
 	FILE *f;
 	int ret;
 
@@ -226,16 +225,10 @@ static void thread_modules_load(void *arg1, void *arg2)
 		strim(pline);
 
 		if(isalpha(pline[0]) || pline[0] == '/') {
-			if(depend_check)
-				depend_check = 0;
 			ret = module_insert_modules(ctx, line);
 			if(ret)
 				log_error("insert %s failed: %d\n", pline, ret);
 		} else if(pline[0] == ':') {
-			if(!depend_check) {
-				log_warn("Modules dependance must on head!\n");
-				continue;
-			}
 			pline[0] = 0;
 			ret = module_depend_check(ctx, line);
 			if(ret)
@@ -250,14 +243,14 @@ static void thread_modules_load(void *arg1, void *arg2)
 	fclose(f);
 }
 
-int fast_modules_load(void)
+int fast_modules_load(int load_mode)
 {
 	struct kmod_ctx *ctx = NULL;
 	thread_pool_t *tp = NULL;
 	struct dirent **conf_list;
 	int i, conf_num;
 	int ret = 0;
-	int ncpus;
+	int ncpus = 1;
 
 	ctx = kmod_new(NULL, NULL);
 	if(!ctx) {
@@ -268,11 +261,12 @@ int fast_modules_load(void)
 	kmod_load_resources(ctx);
 	kmod_set_log_fn(ctx, modules_load_kmod_log, NULL);
 
-	ncpus = get_nprocs_conf();
-	if(ncpus <= 0) {
-		log_error("Can not get cpu numbers.\n");
-		ret = -EINVAL;
-		goto get_ncpu_fail;
+	if(load_mode) {
+		ncpus = get_nprocs_conf();
+		if(ncpus <= 0) {
+			log_error("Can not get cpu numbers.\n");
+			ncpus = 8;
+		}
 	}
 
 	tp = thread_pool_init(ncpus);
