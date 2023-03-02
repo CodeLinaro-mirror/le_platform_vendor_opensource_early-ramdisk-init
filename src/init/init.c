@@ -34,6 +34,18 @@
 #define FS_RD					0
 #define FS_RW					1
 
+struct rootfs_params {
+	char root[CMD_MAX];
+	char fstype[CMD_MAX];
+	char init[CMD_MAX];
+	int flag;
+};
+
+struct cmd_params {
+	struct rootfs_params rootfs;
+	int mode;
+};
+
 static void inline write_marker(const char* name)
 {
 	int fd = -1;
@@ -70,7 +82,7 @@ static int get_cmd_value(char *cmdline, const char *name, char *var)
 
 	ptr = strstr(cmdline, name);
 	if(!ptr) {
-		log_kmsg("cannot find %s\n", name);
+		log_info("cannot find %s\n", name);
 		return -EINVAL;
 	}
 
@@ -86,7 +98,7 @@ static int get_cmd_value(char *cmdline, const char *name, char *var)
 	return strlcpy(var, ptr + cmd_len, val_len + 1);
 }
 
-static int rootfs_cmd_setup(char *root, char *fstype, int *flag, char *init)
+static int rootfs_cmd_setup(struct cmd_params *cmd)
 {
 	int fd;
 	int ret, cmd_len, val_len;
@@ -95,6 +107,8 @@ static int rootfs_cmd_setup(char *root, char *fstype, int *flag, char *init)
 	const char root_str[] = " root=";
 	const char init_str[] = " init=";
 	const char fstype_str[] = " rootfstype=";
+	const char mode_str[] = " early-ramdisk.mode=";
+	char mode[CMD_MAX] = {0};
 
 	fd = open("/proc/cmdline", O_RDONLY|O_CLOEXEC);
 	if(fd < 0) {
@@ -109,26 +123,40 @@ static int rootfs_cmd_setup(char *root, char *fstype, int *flag, char *init)
 	}
 
 	/* get root= from cmdline */
-	ret = get_cmd_value(cmdline, root_str, root);
+	ret = get_cmd_value(cmdline, root_str, cmd->rootfs.root);
 	if(ret < 0) {
 		log_kmsg("get root device failed!\n");
 		goto out;
 	}
 
 	/* get rootfstype= from cmdline */
-	ret = get_cmd_value(cmdline, fstype_str, fstype);
+	ret = get_cmd_value(cmdline, fstype_str, cmd->rootfs.fstype);
 	if(ret < 0) {
-		ret = strlcpy(fstype, DEFAULT_FSTYPE, strlen(DEFAULT_FSTYPE) + 1);
-		log_kmsg("use default fstype: %s\n", fstype);
+		ret = strlcpy(cmd->rootfs.fstype, DEFAULT_FSTYPE, strlen(DEFAULT_FSTYPE) + 1);
+		log_kmsg("use default fstype: %s\n", cmd->rootfs.fstype);
 	}
 
-	get_mount_flag(cmdline, flag);
+	get_mount_flag(cmdline, &cmd->rootfs.flag);
 
 	/* get init from cmdline */
-	ret = get_cmd_value(cmdline, init_str, init);
+	ret = get_cmd_value(cmdline, init_str, cmd->rootfs.init);
 	if(ret < 0) {
-		ret = strlcpy(init, DEFAULT_INIT, strlen(DEFAULT_INIT) + 1);
-		log_kmsg("use default init: %s\n", init);
+		ret = strlcpy(cmd->rootfs.init, DEFAULT_INIT, strlen(DEFAULT_INIT) + 1);
+		log_kmsg("use default init: %s\n", cmd->rootfs.init);
+	}
+
+	/* get mode from cmdline */
+	ret = get_cmd_value(cmdline, mode_str, mode);
+	if(ret < 0) {
+		log_info("Use single thread load modules\n");
+		cmd->mode = 0;
+		ret = 0;
+	} else {
+		cmd->mode = atoi(mode);
+		if(cmd->mode <= 0) {
+			log_info("Use single thread load modules\n");
+			cmd->mode = 0;
+		}
 	}
 
 out:
@@ -165,12 +193,12 @@ static void mount_unsetup(void)
 	umount("/proc");
 	umount("/sys");
 	umount("/dev");
-	umount(LOG_DIR);
 }
 
 int main(int argc, char* argv[])
 {
 	int ret;
+	struct cmd_params cmd;
 	char root[CMD_MAX] = {0};
 	char fstype[CMD_MAX] = {0};
 	char init[CMD_MAX] = {0};
@@ -185,26 +213,31 @@ int main(int argc, char* argv[])
 	if(ret < 0)
 		log_kmsg("open log file: %s fail!\n", LOG_PATH);
 
-	write_marker("early-ramdisk-init-start-up");
+	write_marker("E - early-ramdisk start up");
 	log_kmsg("start\n");
 
-	ret = rootfs_cmd_setup(root, fstype, &flag, init);
+	memset(&cmd, 0, sizeof(struct cmd_params));
+	ret = rootfs_cmd_setup(&cmd);
 	if(ret < 0)
 		return ret;
 
-	fast_modules_load();
+	fast_modules_load(cmd.mode);
+	write_marker("E - early-ramdisk modules done");
+	log_kmsg("load modules done\n");
 
-	log_kmsg("root device: %s, fstype: %s, - 0x%X\n", root, fstype, flag);
-	log_kmsg("Run %s as rootfs init\n", init);
+	log_kmsg("root device: %s, fstype: %s, - 0x%X\n",
+			cmd.rootfs.root, cmd.rootfs.fstype, cmd.rootfs.flag);
+	log_kmsg("Run %s as rootfs init\n", cmd.rootfs.init);
 
-	if(mount(root, "/realroot", fstype, flag, NULL)) {
+	if(mount(cmd.rootfs.root, "/realroot", cmd.rootfs.fstype,
+				cmd.rootfs.flag, NULL)) {
 		log_kmsg("mount rootfs failed: %d\n", errno);
 		return errno;
 	}
 
 	snprintf(real_log, CMD_MAX, "/realroot%s", LOG_DIR);
 	if(mount(LOG_DIR, real_log, "bind", MS_BIND | MS_REC, NULL))
-		log_kmsg("mount early-ramdisk-init logfs failed: %d\n", errno);
+		log_kmsg("mount %s logfs failed: %d\n", real_log, errno);
 
 	if(chroot("/realroot")) {
 		log_kmsg("chroot rootfs failed: %d\n", errno);
@@ -223,7 +256,7 @@ int main(int argc, char* argv[])
 
 	log_close();
 	mount_unsetup();
-	if(execl(init, init, NULL)) {
+	if(execl(cmd.rootfs.init, cmd.rootfs.init, NULL)) {
 		return errno;
 	}
 
