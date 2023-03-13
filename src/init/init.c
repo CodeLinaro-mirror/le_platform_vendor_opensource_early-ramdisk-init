@@ -46,6 +46,8 @@ struct cmd_params {
 	int mode;
 };
 
+static struct cmd_params cmd;
+
 static void inline write_marker(const char* name)
 {
 	int fd = -1;
@@ -198,7 +200,6 @@ static void mount_unsetup(void)
 int main(int argc, char* argv[])
 {
 	int ret;
-	struct cmd_params cmd;
 	char root[CMD_MAX] = {0};
 	char fstype[CMD_MAX] = {0};
 	char init[CMD_MAX] = {0};
@@ -262,3 +263,20 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
+
+int rootfs_wait_func(void *data)
+{
+	int count = 0;
+
+	for(; count < COND_CHECK_MAX; count++) {
+		if(!access(cmd.rootfs.root, F_OK))
+			break;
+		usleep(200);
+	}
+
+	if(count)
+		log_info("Wait for rootfs device %.1fms\n", (count * 2) / 10.0);
+	return 0;
+}
+
+TASKLET_DEFINE_CALL("wait_rootfs_tasklet", rootfs_wait_func);

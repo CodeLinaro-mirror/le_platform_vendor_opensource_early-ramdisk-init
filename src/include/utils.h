@@ -6,6 +6,9 @@
 #ifndef _INIT_UTILS_H
 #define _INIT_UTILS_H
 
+#define COND_CHECK_MAX		10000 /* max wait 2 seconds */
+
+int wait_rootfs_tasklet(void *data);
 extern size_t strlcpy(char *dst, const char *src, size_t siz);
 
 typedef enum {
@@ -26,6 +29,19 @@ void log_kmsg(const char *format, ...);
 #define log_warn(...) log_write(LOG_WARN, __VA_ARGS__)
 #define log_info(...) log_write(LOG_INFO, __VA_ARGS__)
 #define log_debug(...)
+
+typedef int (*tasklet_func_t)(void *);
+
+struct tasklet {
+	char *name;
+	tasklet_func_t func;
+};
+
+#define TASKLET_DEFINE_CALL(_name, _func) \
+	struct tasklet _func##_tasklet __attribute__((unused)) \
+	__attribute__((section(".data.tasklet"))) = { _name, _func};
+
+tasklet_func_t get_tasklet_from_string(char *name);
 
 void inline safe_free(char** p)
 {
