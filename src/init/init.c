@@ -18,31 +18,50 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <errno.h>
+#include <linux/dm-ioctl.h>
 
 #include "utils.h"
 #include "init.h"
 
 #define KPI_VALUE_PATH          "/sys/kernel/boot_kpi/kpi_values"
 #define LOG_PATH				LOG_DIR"/early_ramdisk_init.log"
+#define DM_DEVICE				"/dev/mapper/control"
 
 #define MSG_LEN					128
+#define NAME_MAX				128
 #define DEFAULT_INIT			"/sbin/init"
 #define DEFAULT_FSTYPE			"ext4"
 #define LINE_MAX				2048
-#define CMD_MAX					64
+#define CMD_MAX					512
 #define FS_FLAG_MAX				2
 #define FS_RD					0
 #define FS_RW					1
+#define DM_BUF_LEN				1024
+#define DM_MAX_TARGETS			5
 
 struct rootfs_params {
 	char root[CMD_MAX];
+	char uuid[CMD_MAX];
 	char fstype[CMD_MAX];
 	char init[CMD_MAX];
 	int flag;
 };
 
+struct dm_params {
+	char buf[CMD_MAX];
+	bool enable;
+	char *name;
+	char *uuid;
+	char *minor;
+	int  flags;
+	struct dm_target_spec sp[DM_MAX_TARGETS];
+	char *target_args_array[DM_MAX_TARGETS];
+	int target_count;
+};
+
 struct cmd_params {
 	struct rootfs_params rootfs;
+	struct dm_params dm;
 	int mode;
 };
 
@@ -77,7 +96,8 @@ static void get_mount_flag(char *cmdline, int *flag)
 		*flag &= ~MS_RDONLY;
 }
 
-static int get_cmd_value(char *cmdline, const char *name, char *var)
+static int get_cmd_value(char *cmdline, const char *name, char *var,
+		const char separator)
 {
 	int ret, cmd_len, val_len;
 	char *ptr;
@@ -89,7 +109,7 @@ static int get_cmd_value(char *cmdline, const char *name, char *var)
 	}
 
 	cmd_len = val_len = strlen(name);
-	while(*(ptr + val_len) != ' ')
+	while(*(ptr + val_len) != separator)
 		val_len++;
 	val_len -= cmd_len;
 	if(val_len > CMD_MAX) {
@@ -100,13 +120,90 @@ static int get_cmd_value(char *cmdline, const char *name, char *var)
 	return strlcpy(var, ptr + cmd_len, val_len + 1);
 }
 
+static char *dm_table_parse_entry(struct dm_params *dm, char *entry)
+{
+	const unsigned int n = dm->target_count - 1;
+	struct dm_target_spec *sp = &dm->sp[n];
+	unsigned int i;
+	char *filed[4];
+	char *next;
+
+	next = filed[0] = entry;
+	for(i = 1; i < 4; i++) {
+		filed[i] = strchr(next, ' ');
+		if(!filed[i])
+			return NULL;
+		*filed[i] = '\0';
+		next = ++filed[i];
+	}
+
+	next = strchr(next, ',');
+	if(next) {
+		*next = '\0';
+		next++;
+	}
+
+	sp->sector_start = atol(filed[0]);
+	sp->length = atol(filed[1]);
+	strlcpy(sp->target_type, filed[2], sizeof(sp->target_type));
+	dm->target_args_array[n] = filed[3];
+
+	return next;
+}
+
+static int dm_table_parse(struct dm_params *dm, char *table)
+{
+
+	while(table) {
+		if(++dm->target_count > DM_MAX_TARGETS) {
+			log_kmsg("too many device-mapper table tagets!\n");
+			return -EINVAL;
+		}
+
+		table = dm_table_parse_entry(dm, table);
+	}
+
+	return 0;
+}
+
+static int dm_cmd_parse(struct dm_params *dm)
+{
+	char *filed[5];
+	unsigned int i;
+	char *next;
+
+	next = filed[0] = dm->buf;
+	for(i = 1; i < 5; i++) {
+		filed[i] = strchr(next, ',');
+		if(!filed[1])
+			return -EINVAL;
+		*filed[i] = '\0';
+		next = ++filed[i];
+	}
+	dm->name = filed[0];
+	dm->uuid = filed[1];
+	dm->minor = filed[2];
+
+	if(strlen(dm->minor))
+		dm->flags |= DM_PERSISTENT_DEV_FLAG;
+
+	if(!strcmp(filed[3], "ro"))
+		dm->flags |= DM_READONLY_FLAG;
+	else if (strcmp(filed[3], "rw"))
+		return -EINVAL;
+
+	return dm_table_parse(dm, filed[4]);
+}
+
 static int rootfs_cmd_setup(struct cmd_params *cmd)
 {
 	int fd;
 	int ret, cmd_len, val_len;
 	char cmdline[LINE_MAX];
 	char *pt;
+	const char dm_str[] = " dm-mod.create=\"";
 	const char root_str[] = " root=";
+	const char uuid_str[] = "PARTUUID=";
 	const char init_str[] = " init=";
 	const char fstype_str[] = " rootfstype=";
 	const char mode_str[] = " early-ramdisk.mode=";
@@ -124,15 +221,31 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		return errno;
 	}
 
+	ret = get_cmd_value(cmdline, dm_str, cmd->dm.buf, '\"');
+	if(ret < 0) {
+		log_info("dm-verity disabled!\n");
+	} else {
+		if(!dm_cmd_parse(&cmd->dm))
+			cmd->dm.enable = true;
+	}
+
 	/* get root= from cmdline */
-	ret = get_cmd_value(cmdline, root_str, cmd->rootfs.root);
+	ret = get_cmd_value(cmdline, root_str, cmd->rootfs.root, ' ');
 	if(ret < 0) {
 		log_kmsg("get root device failed!\n");
 		goto out;
 	}
 
+	if(!strncmp(cmd->rootfs.root, uuid_str, sizeof(uuid_str))) {
+		ret = get_cmd_value(cmd->rootfs.root, uuid_str, cmd->rootfs.uuid, ' ');
+		if(ret < 0) {
+			log_kmsg("Get rootfs UUID failed!\n");
+			goto out;
+		}
+	}
+
 	/* get rootfstype= from cmdline */
-	ret = get_cmd_value(cmdline, fstype_str, cmd->rootfs.fstype);
+	ret = get_cmd_value(cmdline, fstype_str, cmd->rootfs.fstype, ' ');
 	if(ret < 0) {
 		ret = strlcpy(cmd->rootfs.fstype, DEFAULT_FSTYPE, strlen(DEFAULT_FSTYPE) + 1);
 		log_kmsg("use default fstype: %s\n", cmd->rootfs.fstype);
@@ -141,14 +254,14 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	get_mount_flag(cmdline, &cmd->rootfs.flag);
 
 	/* get init from cmdline */
-	ret = get_cmd_value(cmdline, init_str, cmd->rootfs.init);
+	ret = get_cmd_value(cmdline, init_str, cmd->rootfs.init, ' ');
 	if(ret < 0) {
 		ret = strlcpy(cmd->rootfs.init, DEFAULT_INIT, strlen(DEFAULT_INIT) + 1);
 		log_kmsg("use default init: %s\n", cmd->rootfs.init);
 	}
 
 	/* get mode from cmdline */
-	ret = get_cmd_value(cmdline, mode_str, mode);
+	ret = get_cmd_value(cmdline, mode_str, mode, ' ');
 	if(ret < 0) {
 		log_info("Use single thread load modules\n");
 		cmd->mode = 0;
@@ -263,6 +376,101 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
+
+static inline void dm_fill_ioctl(struct dm_ioctl *ctl, int buffer_size)
+{
+	ctl->data_size = buffer_size;
+	ctl->data_start = sizeof(struct dm_ioctl);
+	ctl->version[0] = DM_VERSION_MAJOR;
+	ctl->version[1] = DM_VERSION_MINOR;
+	ctl->version[2] = DM_VERSION_PATCHLEVEL;
+	ctl->flags = cmd.dm.flags;
+	strlcpy(ctl->name, cmd.dm.name, strlen(cmd.dm.name) + 1);
+	strlcpy(ctl->uuid, cmd.dm.uuid, strlen(cmd.dm.uuid) + 1);
+}
+
+int dm_create_roots(void *data)
+{
+	int fd = -1;
+	int ret = 0;
+	int i = 0;
+	char *dm_buffer = NULL;
+	struct dm_ioctl *ctl;
+	struct dm_target_spec *sp;
+
+	if(!cmd.dm.enable)
+		return -EINVAL;
+
+	dm_buffer = malloc(DM_BUF_LEN);
+	if(!dm_buffer) {
+		log_kmsg("Device Mapper: alloc dm ioctl buffer failed!\n");
+		return -ENOMEM;
+	}
+
+	fd = open(DM_DEVICE, O_RDWR | O_CLOEXEC);
+	if(fd < 0) {
+		log_kmsg("Open device mapper: %s failed\n", DM_DEVICE);
+		return fd;
+	}
+
+	memset(dm_buffer, 0, DM_BUF_LEN);
+	ctl = (struct dm_ioctl *)dm_buffer;
+	dm_fill_ioctl(ctl, DM_BUF_LEN);
+
+	if((ret = ioctl(fd, DM_DEV_CREATE, ctl))) {
+		log_kmsg("Device mapper create %s failed: %d!\n", ctl->name, ret);
+		goto create_fail;
+	}
+
+	memset(dm_buffer, 0, DM_BUF_LEN);
+	dm_fill_ioctl(ctl, DM_BUF_LEN);
+	sp = (struct dm_target_spec *)(dm_buffer + sizeof(struct dm_ioctl));
+	ctl->target_count = cmd.dm.target_count;
+	for(i = 0; i < ctl->target_count; i++) {
+		*sp = cmd.dm.sp[i];
+		sp++;
+		if(((char *)sp + strlen(cmd.dm.target_args_array[i]))
+					> (dm_buffer + DM_BUF_LEN)) {
+			log_kmsg("Device mapper buffer size too small, Please increase DM_BUF_LEN\n");
+			goto load_fail;
+		}
+		memcpy(sp, cmd.dm.target_args_array[i], strlen(cmd.dm.target_args_array[i]));
+		sp = (struct dm_target_spec *)((char *)sp + strlen(cmd.dm.target_args_array[i]));
+	}
+
+	for(i = 0; i < COND_CHECK_MAX; i++) {
+		if((ret = ioctl(fd, DM_TABLE_LOAD, ctl)) == 0)
+			break;
+		usleep(200);
+	}
+
+	if(ret) {
+		log_kmsg("Device mapper TABLE_LOAD failed: %d\n", ret);
+			goto load_fail;
+	}
+
+	memset(dm_buffer, 0, DM_BUF_LEN);
+	dm_fill_ioctl(ctl, DM_BUF_LEN);
+
+	if((ret = ioctl(fd, DM_DEV_SUSPEND, ctl))) {
+		log_kmsg("Device mapper Active failed: %d\n", ret);
+		goto active_fail;
+	}
+
+	free(dm_buffer);
+	return ret;
+
+active_fail:
+load_fail:
+	dm_fill_ioctl(ctl, DM_BUF_LEN);
+	ioctl(fd, DM_DEV_REMOVE, ctl);
+
+create_fail:
+	safe_close(fd);
+	free(dm_buffer);
+	return ret;
+}
+TASKLET_DEFINE_CALL("dm_create_tasklet", dm_create_roots);
 
 int rootfs_wait_func(void *data)
 {
