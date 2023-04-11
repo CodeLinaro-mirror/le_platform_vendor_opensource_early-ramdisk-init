@@ -100,7 +100,7 @@ static int get_cmd_value(char *cmdline, const char *name, char *var,
 		const char separator)
 {
 	int ret, cmd_len, val_len;
-	char *ptr;
+	char *ptr, *ptmp;
 
 	ptr = strstr(cmdline, name);
 	if(!ptr) {
@@ -108,10 +108,12 @@ static int get_cmd_value(char *cmdline, const char *name, char *var,
 		return -EINVAL;
 	}
 
-	cmd_len = val_len = strlen(name);
-	while(*(ptr + val_len) != separator)
-		val_len++;
-	val_len -= cmd_len;
+	cmd_len = strlen(name);
+	ptmp = ptr + cmd_len;
+	while(*ptmp && (*ptmp != separator))
+		ptmp++;
+
+	val_len = ptmp - ptr - cmd_len;
 	if(val_len > CMD_MAX) {
 		log_kmsg("%s value execeed: %d!\n", name, CMD_MAX);
 		 return -EINVAL;
@@ -236,12 +238,14 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		goto out;
 	}
 
-	if(!strncmp(cmd->rootfs.root, uuid_str, sizeof(uuid_str))) {
+	if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str))) {
 		ret = get_cmd_value(cmd->rootfs.root, uuid_str, cmd->rootfs.uuid, ' ');
 		if(ret < 0) {
 			log_kmsg("Get rootfs UUID failed!\n");
 			goto out;
 		}
+		memset((void *)cmd->rootfs.root, 0, sizeof(cmd->rootfs.root));
+		strlcpy(cmd->rootfs.root, "/dev/sde21", strlen("/dev/sde21") + 1);
 	}
 
 	/* get rootfstype= from cmdline */
