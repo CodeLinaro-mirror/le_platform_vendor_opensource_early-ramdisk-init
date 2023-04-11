@@ -19,6 +19,7 @@
 #include <sched.h>
 #include <errno.h>
 #include <linux/dm-ioctl.h>
+#include <blkid/blkid.h>
 
 #include "utils.h"
 #include "init.h"
@@ -41,9 +42,9 @@
 
 struct rootfs_params {
 	char root[CMD_MAX];
-	char uuid[CMD_MAX];
 	char fstype[CMD_MAX];
 	char init[CMD_MAX];
+	int root_alias;
 	int flag;
 };
 
@@ -100,7 +101,7 @@ static int get_cmd_value(char *cmdline, const char *name, char *var,
 		const char separator)
 {
 	int ret, cmd_len, val_len;
-	char *ptr;
+	char *ptr, *ptmp;
 
 	ptr = strstr(cmdline, name);
 	if(!ptr) {
@@ -108,10 +109,12 @@ static int get_cmd_value(char *cmdline, const char *name, char *var,
 		return -EINVAL;
 	}
 
-	cmd_len = val_len = strlen(name);
-	while(*(ptr + val_len) != separator)
-		val_len++;
-	val_len -= cmd_len;
+	cmd_len = strlen(name);
+	ptmp = ptr + cmd_len;
+	while(*ptmp && (*ptmp != separator))
+		ptmp++;
+
+	val_len = ptmp - ptr - cmd_len;
 	if(val_len > CMD_MAX) {
 		log_kmsg("%s value execeed: %d!\n", name, CMD_MAX);
 		 return -EINVAL;
@@ -204,6 +207,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char dm_str[] = " dm-mod.create=\"";
 	const char root_str[] = " root=";
 	const char uuid_str[] = "PARTUUID=";
+	const char lable_str[] = "LABEL=";
 	const char init_str[] = " init=";
 	const char fstype_str[] = " rootfstype=";
 	const char mode_str[] = " early-ramdisk.mode=";
@@ -236,12 +240,8 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		goto out;
 	}
 
-	if(!strncmp(cmd->rootfs.root, uuid_str, sizeof(uuid_str))) {
-		ret = get_cmd_value(cmd->rootfs.root, uuid_str, cmd->rootfs.uuid, ' ');
-		if(ret < 0) {
-			log_kmsg("Get rootfs UUID failed!\n");
-			goto out;
-		}
+	if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str)) || !strncmp(cmd->rootfs.root, lable_str, strlen(lable_str))) {
+		cmd->rootfs.root_alias = 1;
 	}
 
 	/* get rootfstype= from cmdline */
@@ -277,6 +277,21 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 out:
 	safe_close(fd);
 	return ret;
+}
+
+static int rootfs_alias_setup(struct rootfs_params *rootfs)
+{
+	char *root_dev = NULL;
+
+	root_dev = blkid_get_devname(NULL, rootfs->root, NULL);
+	if(!root_dev) {
+		log_kmsg("Can't find rootfs device: %s\n", rootfs->root);
+		return -EINVAL;
+	}
+
+	strlcpy(rootfs->root, root_dev, strlen(root_dev) + 1);
+	free(root_dev);
+	return 0;
 }
 
 static int mount_setup(void)
@@ -338,6 +353,12 @@ int main(int argc, char* argv[])
 	fast_modules_load(cmd.mode);
 	write_marker("E - early-ramdisk modules done");
 	log_kmsg("load modules done\n");
+
+	if(cmd.rootfs.root_alias) {
+		ret = rootfs_alias_setup(&cmd.rootfs);
+		if(ret < 0)
+			return ret;
+	}
 
 	log_kmsg("root device: %s, fstype: %s, - 0x%X\n",
 			cmd.rootfs.root, cmd.rootfs.fstype, cmd.rootfs.flag);
