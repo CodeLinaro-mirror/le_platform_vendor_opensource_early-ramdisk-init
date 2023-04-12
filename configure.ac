@@ -15,6 +15,7 @@ AC_PROG_CC
 # Checks for libraries.
 AC_CHECK_LIB([kmod], [kmod_new])
 AC_CHECK_LIB([pthread], [pthread_mutex_init])
+AC_CHECK_LIB([blkid], [blkid_new_probe])
 
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h limits.h stdint.h stdlib.h string.h sys/mount.h unistd.h])
