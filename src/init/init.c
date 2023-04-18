@@ -374,9 +374,24 @@ int main(int argc, char* argv[])
 	if(mount(LOG_DIR, real_log, "bind", MS_BIND | MS_REC, NULL))
 		log_kmsg("mount %s logfs failed: %d\n", real_log, errno);
 
-	if(chroot("/realroot")) {
-		log_kmsg("chroot rootfs failed: %d\n", errno);
-		return errno;
+	if (chdir("/realroot")) {
+		log_kmsg("failed to change directory to new root");
+		return -1;
+	}
+
+	if (mount("/realroot", "/", NULL, MS_MOVE, NULL) < 0) {
+		log_kmsg("failed to mount moving %s to /", "/realroot");
+		return -1;
+	}
+
+	if (chroot(".")) {
+		log_kmsg("failed to change root");
+		return -1;
+	}
+
+	if (chdir("/")) {
+		log_kmsg("cannot change directory to %s", "/");
+		return -1;
 	}
 
 #ifdef EARLY_INIT
