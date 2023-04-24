@@ -202,7 +202,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 {
 	int fd;
 	int ret, cmd_len, val_len;
-	char cmdline[LINE_MAX];
+	char cmdline[LINE_MAX] = {0};
 	char *pt;
 	const char dm_str[] = " dm-mod.create=\"";
 	const char root_str[] = " root=";
@@ -219,7 +219,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		return errno;
 	}
 
-	ret = read(fd, cmdline, LINE_MAX);
+	ret = read(fd, cmdline, LINE_MAX - 1);
 	if(ret < 0) {
 		log_kmsg("read cmdline fail: %d\n", errno);
 		return errno;

@@ -162,7 +162,7 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 			continue;
 		}
 
-		ret = read(fd, buf, sizeof(buf));
+		ret = read(fd, buf, sizeof(buf) - 1);
 		if(ret < 0) {
 			log_warn("could not read from %s: %d\n", init_path, ret);
 			break;
