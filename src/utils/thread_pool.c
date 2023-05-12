@@ -138,6 +138,8 @@ int thread_pool_wait_finish(thread_pool_t *tp)
 		pthread_cond_timedwait(&tp->notify, &tp->lock, &time_wait);
 		pthread_mutex_unlock(&tp->lock);
 	}
+
+	return 0;
 }
 
 int thread_pool_free(thread_pool_t *tp)
