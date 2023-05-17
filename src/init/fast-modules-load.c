@@ -27,7 +27,6 @@
 #define MODULE_LINE_MAX			256
 #define PATH_PAD			128
 #define INIT_PATH_MAX			256
-#define DEPEND_CHECK_MAX		10000 /* max wait 2 seconds */
 
 static void modules_load_kmod_log(void *data, int priority,
 		const char *file, int line, const char *fn,
@@ -45,7 +44,7 @@ static inline char *strim(char *s)
 		return s;
 
 	end = s + size -1;
-	while(end >= s && isspace(*end))
+	while(end >= s && (isspace(*end) || iscntrl(*end)))
 		end--;
 	*(end + 1) = '\0';
 
@@ -153,15 +152,14 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 			"/sys/module/%s/initstate", kmod_module_get_name(kmod));
 
 	log_debug("check state file: %s\n", init_path);
-	while(count < DEPEND_CHECK_MAX) {
+	while(count < COND_CHECK_MAX) {
+		memset(buf, 0, sizeof(buf));
+		fd = open(init_path, O_RDONLY | O_CLOEXEC);
 		if(fd < 0) {
-			fd = open(init_path, O_RDONLY | O_CLOEXEC);
-			if(fd < 0) {
-				log_debug("could not find init file: %s\n", init_path);
-				count++;
-				usleep(2000);
-				continue;
-			}
+			log_debug("could not find init file: %s\n", init_path);
+			count++;
+			usleep(200);
+			continue;
 		}
 
 		ret = read(fd, buf, sizeof(buf));
@@ -176,23 +174,47 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 			break;
 		else if(streq(buf, "coming") || streq(buf, "going")) {
 			count++;
+			close(fd);
 			usleep(200);
 			continue;
 		} else {
 			log_warn("%s: unknow state: %s\n", kmod_module_get_name(kmod), buf);
 			count++;
+			close(fd);
 			usleep(200);
 		}
 	}
+	if(fd >= 0)
+		close(fd);
 
 	if(count) {
-		log_warn("depend check wait %s %d times!!!\n", module, count);
-		if(count == DEPEND_CHECK_MAX)
+		log_warn("depend check wait %s %.1f ms!!!\n", kmod_module_get_name(kmod),
+				(count * 2) / 10.0);
+		if(count == COND_CHECK_MAX)
 			ret = -ETIMEDOUT;
 	}
 
-	close(fd);
 	return ret;
+}
+
+static int module_run_tasklet(char *task)
+{
+	char *task_name = task + PATH_PAD + 1;
+	tasklet_func_t func;
+
+	if(!task_name[0]) {
+		log_warn("Empty tasklet name!\n");
+		return -EINVAL;
+	}
+
+	strim(task_name);
+	func = get_tasklet_from_string(task_name);
+	if(!func) {
+		log_warn("Tasklet %s not found!\n", task_name);
+		return -EEXIST;
+	}
+
+	return func(NULL);
 }
 
 static void thread_modules_load(void *arg1, void *arg2)
@@ -224,18 +246,29 @@ static void thread_modules_load(void *arg1, void *arg2)
 	while(fgets(pline, MODULE_LINE_MAX, f)) {
 		strim(pline);
 
-		if(isalpha(pline[0]) || pline[0] == '/') {
+		switch(pline[0]) {
+		case 'A' ... 'Z':
+		case 'a' ... 'z':
+		case '/':
 			ret = module_insert_modules(ctx, line);
 			if(ret)
 				log_error("insert %s failed: %d\n", pline, ret);
-		} else if(pline[0] == ':') {
+			break;
+		case ':':
 			pline[0] = 0;
 			ret = module_depend_check(ctx, line);
 			if(ret)
 				log_warn("module depend check %s failed: %d\n", pline + 1, ret);
-		} else {
-			 log_warn("Wrong format of %s!\n", pline);
-			continue;
+			break;
+		case '@':
+			pline[0] = 0;
+			ret = module_run_tasklet(line);
+			if(ret)
+				log_warn("module run tasklet %s failed: %d\n", pline, ret);
+			break;
+		default:
+			log_warn("Wrong format of %s!\n", pline);
+			break;
 		}
 		memset(line, 0, sizeof(line));
 	}
