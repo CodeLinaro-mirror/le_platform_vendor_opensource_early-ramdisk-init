@@ -3,6 +3,7 @@
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -18,6 +19,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <assert.h>
+#include <sched.h>
+#include <pthread.h>
 
 #include "utils.h"
 #include "thread_pool.h"
@@ -197,6 +200,48 @@ static int module_depend_check(struct kmod_ctx *ctx, char *module)
 	return ret;
 }
 
+static inline int _module_set_cpu_affinity(cpu_set_t cpuset)
+{
+	pthread_t pid;
+
+	pid = pthread_self();
+	return pthread_setaffinity_np(pid, sizeof(cpuset), &cpuset);
+}
+
+static int module_set_cpu_affinity(char *arg, cpu_set_t *oldset)
+{
+	char *mask = arg + PATH_PAD + 1;
+	const char name[] = {"mask="};
+	int cpu = -1;
+	cpu_set_t newset;
+	pthread_t pid;
+	int ret = -1;
+
+	if(strncmp(mask, name, strlen(name)))
+		return -EINVAL;
+
+	mask += strlen(name);
+	cpu = atoi(mask);
+
+	if((cpu < 0) || (cpu >= get_nprocs_conf()))
+		return -EINVAL;
+
+	pid = pthread_self();
+	ret = pthread_getaffinity_np(pid, sizeof(cpu_set_t), oldset);
+	if(ret)
+		return ret;
+
+	CPU_ZERO(&newset);
+	CPU_SET(cpu, &newset);
+
+	return _module_set_cpu_affinity(newset);
+}
+
+static int module_clean_cpu_affinity(cpu_set_t old_mask)
+{
+	return _module_set_cpu_affinity(old_mask);
+}
+
 static int module_run_tasklet(char *task)
 {
 	char *task_name = task + PATH_PAD + 1;
@@ -225,6 +270,8 @@ static void thread_modules_load(void *arg1, void *arg2)
 	char *pline;
 	FILE *f;
 	int ret;
+	int cpu_set_flag = 0;
+	cpu_set_t oldset;
 
 	log_info("config file: %s\n", name);
 
@@ -256,9 +303,16 @@ static void thread_modules_load(void *arg1, void *arg2)
 			break;
 		case ':':
 			pline[0] = 0;
+			log_info("config: %s depend on %s\n", name, pline + 1);
 			ret = module_depend_check(ctx, line);
 			if(ret)
 				log_warn("module depend check %s failed: %d\n", pline + 1, ret);
+			break;
+		case '>':
+			ret = module_set_cpu_affinity(line, &oldset);
+			if(ret)
+				log_warn("module set cpu affinity %s failed: %d", pline, ret);
+			cpu_set_flag = 1;
 			break;
 		case '@':
 			pline[0] = 0;
@@ -273,6 +327,10 @@ static void thread_modules_load(void *arg1, void *arg2)
 		memset(line, 0, sizeof(line));
 	}
 
+	if(cpu_set_flag)
+		module_clean_cpu_affinity(oldset);
+
+	log_info("config %s load done\n", name);
 	fclose(f);
 }
 
