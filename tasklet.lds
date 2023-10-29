@@ -7,7 +7,7 @@ SECTIONS
 {
 	. = ALIGN(16);
 	__tasklet_start = .;
-	.data.tasklet(READONLY) : {
+	rodata.data.tasklet : {
 		KEEP(*(.data.tasklet))
 	}
 	__tasklet_end = .;
