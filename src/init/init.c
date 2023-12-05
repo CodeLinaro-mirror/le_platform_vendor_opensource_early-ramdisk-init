@@ -208,6 +208,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char root_str[] = " root=";
 	const char uuid_str[] = "PARTUUID=";
 	const char lable_str[] = "LABEL=";
+	const char partlable_str[] = "PARTLABEL=";
 	const char init_str[] = " init=";
 	const char fstype_str[] = " rootfstype=";
 	const char mode_str[] = " early-ramdisk.mode=";
@@ -240,7 +241,9 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		goto out;
 	}
 
-	if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str)) || !strncmp(cmd->rootfs.root, lable_str, strlen(lable_str))) {
+	if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str)) ||
+			!strncmp(cmd->rootfs.root, lable_str, strlen(lable_str)) ||\
+			!strncmp(cmd->rootfs.root, partlable_str, strlen(partlable_str))) {
 		cmd->rootfs.root_alias = 1;
 	}
 
