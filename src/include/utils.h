@@ -25,7 +25,7 @@ void log_write(log_type_t level, const char *format, ...);
 void log_close(void);
 
 void log_kmsg(const char *format, ...);
-#define log_error(...) log_write(LOG_ERR, __VA_ARGS__)
+#define log_error(...) log_kmsg(__VA_ARGS__)
 #define log_warn(...) log_write(LOG_WARN, __VA_ARGS__)
 #define log_info(...) log_write(LOG_INFO, __VA_ARGS__)
 #define log_debug(...)

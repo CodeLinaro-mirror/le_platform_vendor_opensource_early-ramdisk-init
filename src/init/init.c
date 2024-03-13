@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <linux/dm-ioctl.h>
 #include <blkid/blkid.h>
+#include <ctype.h>
 
 #include "utils.h"
 #include "init.h"
@@ -85,42 +86,70 @@ static void inline write_marker(const char* name)
 	return;
 }
 
-static void get_mount_flag(char *cmdline, int *flag)
+/**
+ * skip_spaces - Removes leading whitespace from @str.
+ * @str: The string to be stripped.
+ *
+ * Returns a pointer to the first non-whitespace character in @str.
+ */
+char *skip_spaces(const char *str)
 {
-	int ret, i;
-	char *ptr;
-	const char flag_name[FS_FLAG_MAX][16] = {{" ro "}, {" rw "}};
-
-	if(strstr(cmdline, flag_name[FS_RD]))
-		*flag |= MS_RDONLY;
-	else if(strstr(cmdline, flag_name[FS_RW]))
-		*flag &= ~MS_RDONLY;
+	while (isspace(*str))
+		++str;
+	return (char *)str;
 }
-
-static int get_cmd_value(char *cmdline, const char *name, char *var,
-		const char separator)
+/*
+ * Parse a string to get a param value pair.
+ * You can use " around spaces, but can't escape ".
+ * Hyphens and underscores equivalent in parameter names.
+ */
+char *next_arg(char *args, char **param, char **val)
 {
-	int ret, cmd_len, val_len;
-	char *ptr, *ptmp;
+	unsigned int i, equals = 0;
+	int in_quote = 0, quoted = 0;
 
-	ptr = strstr(cmdline, name);
-	if(!ptr) {
-		log_info("cannot find %s\n", name);
-		return -EINVAL;
+	if (*args == '"') {
+		args++;
+		in_quote = 1;
+		quoted = 1;
 	}
 
-	cmd_len = strlen(name);
-	ptmp = ptr + cmd_len;
-	while(*ptmp && (*ptmp != separator))
-		ptmp++;
-
-	val_len = ptmp - ptr - cmd_len;
-	if(val_len > CMD_MAX) {
-		log_kmsg("%s value execeed: %d!\n", name, CMD_MAX);
-		 return -EINVAL;
+	for (i = 0; args[i]; i++) {
+		if (isspace(args[i]) && !in_quote)
+			break;
+		if (equals == 0) {
+			if (args[i] == '=')
+				equals = i;
+		}
+		if (args[i] == '"')
+			in_quote = !in_quote;
 	}
 
-	return strlcpy(var, ptr + cmd_len, val_len + 1);
+	*param = args;
+	if (!equals)
+		*val = NULL;
+	else {
+		args[equals] = '\0';
+		*val = args + equals + 1;
+
+		/* Don't include quotes in value. */
+		if (**val == '"') {
+			(*val)++;
+			if (args[i-1] == '"')
+				args[i-1] = '\0';
+		}
+	}
+	if (quoted && args[i-1] == '"')
+		args[i-1] = '\0';
+
+	if (args[i]) {
+		args[i] = '\0';
+		args += i + 1;
+	} else
+		args += i;
+
+	/* Chew up trailing spaces. */
+	return skip_spaces(args);
 }
 
 static char *dm_table_parse_entry(struct dm_params *dm, char *entry)
@@ -204,15 +233,16 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	int ret, cmd_len, val_len;
 	char cmdline[LINE_MAX] = {0};
 	char *pt;
-	const char dm_str[] = " dm-mod.create=\"";
-	const char root_str[] = " root=";
+	const char dm_str[] = "dm-mod.create";
+	const char root_str[] = "root";
 	const char uuid_str[] = "PARTUUID=";
 	const char lable_str[] = "LABEL=";
 	const char partlable_str[] = "PARTLABEL=";
-	const char init_str[] = " init=";
-	const char fstype_str[] = " rootfstype=";
-	const char mode_str[] = " early-ramdisk.mode=";
+	const char init_str[] = " init";
+	const char fstype_str[] = " rootfstype";
+	const char mode_str[] = " early-ramdisk.mode";
 	char mode[CMD_MAX] = {0};
+	char *buf = NULL;
 
 	fd = open("/proc/cmdline", O_RDONLY|O_CLOEXEC);
 	if(fd < 0) {
@@ -226,19 +256,43 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		return errno;
 	}
 
-	ret = get_cmd_value(cmdline, dm_str, cmd->dm.buf, '\"');
-	if(ret < 0) {
-		log_info("dm-verity disabled!\n");
-	} else {
-		if(!dm_cmd_parse(&cmd->dm))
-			cmd->dm.enable = true;
-	}
+	cmdline[LINE_MAX - 1] = '\0';
+	buf = skip_spaces(cmdline);
+	while (*buf) {
+		char *param, *val;
+		buf = next_arg(buf, &param, &val);
+		if (!val && !strcmp(param, "--"))
+			break;
 
-	/* get root= from cmdline */
-	ret = get_cmd_value(cmdline, root_str, cmd->rootfs.root, ' ');
-	if(ret < 0) {
-		log_kmsg("get root device failed!\n");
-		goto out;
+		if (!strcmp(param, dm_str) && val) {
+			ret = strlcpy(cmd->dm.buf, val, strlen(val) + 1);
+			if(!dm_cmd_parse(&cmd->dm))
+				cmd->dm.enable = true;
+		}
+		if (!strcmp(param, root_str) && val) {
+			ret = strlcpy(cmd->rootfs.root, val, strlen(val) + 1);
+			if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str)) || !strncmp(cmd->rootfs.root, lable_str, strlen(lable_str))) {
+				cmd->rootfs.root_alias = 1;
+			}
+		}
+		if (!strcmp(param, init_str) && val) {
+			ret = strlcpy(cmd->rootfs.init, val, strlen(val) + 1);
+		}
+		if (!strcmp(param, fstype_str) && val)
+			ret = strlcpy(cmd->rootfs.fstype, val, strlen(val) + 1);
+		if (!strcmp(param, mode_str) && val) {
+			cmd->mode = atoi(val);
+			if(cmd->mode <= 0) {
+				log_info("Use single thread load modules\n");
+				cmd->mode = 0;
+			}
+		}
+		if (!strcmp(param, "ro")) {
+			cmd->rootfs.flag |= MS_RDONLY;
+		}
+		if (!strcmp(param, "rw")) {
+			cmd->rootfs.flag &= ~MS_RDONLY;
+		}
 	}
 
 	if(!strncmp(cmd->rootfs.root, uuid_str, strlen(uuid_str)) ||
@@ -247,34 +301,17 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 		cmd->rootfs.root_alias = 1;
 	}
 
-	/* get rootfstype= from cmdline */
-	ret = get_cmd_value(cmdline, fstype_str, cmd->rootfs.fstype, ' ');
-	if(ret < 0) {
-		ret = strlcpy(cmd->rootfs.fstype, DEFAULT_FSTYPE, strlen(DEFAULT_FSTYPE) + 1);
-		log_kmsg("use default fstype: %s\n", cmd->rootfs.fstype);
-	}
-
-	get_mount_flag(cmdline, &cmd->rootfs.flag);
-
-	/* get init from cmdline */
-	ret = get_cmd_value(cmdline, init_str, cmd->rootfs.init, ' ');
-	if(ret < 0) {
+	if (0 == strlen(cmd->rootfs.init)) {
 		ret = strlcpy(cmd->rootfs.init, DEFAULT_INIT, strlen(DEFAULT_INIT) + 1);
 		log_kmsg("use default init: %s\n", cmd->rootfs.init);
 	}
-
-	/* get mode from cmdline */
-	ret = get_cmd_value(cmdline, mode_str, mode, ' ');
-	if(ret < 0) {
-		log_info("Use single thread load modules\n");
-		cmd->mode = 0;
-		ret = 0;
-	} else {
-		cmd->mode = atoi(mode);
-		if(cmd->mode <= 0) {
-			log_info("Use single thread load modules\n");
-			cmd->mode = 0;
-		}
+	if (0 == strlen(cmd->rootfs.fstype)) {
+		ret = strlcpy(cmd->rootfs.fstype, DEFAULT_FSTYPE, strlen(DEFAULT_FSTYPE) + 1);
+		log_kmsg("use default fstype: %s\n", cmd->rootfs.fstype);
+	}
+	if (0 == strlen(cmd->rootfs.root)) {
+		log_kmsg("get root device failed!\n");
+		ret = -1;
 	}
 
 out:
@@ -349,6 +386,9 @@ int main(int argc, char* argv[])
 	log_kmsg("start\n");
 
 	memset(&cmd, 0, sizeof(struct cmd_params));
+	memset(&(cmd.rootfs.root), 0, sizeof(cmd.rootfs.root));
+	memset(&(cmd.rootfs.init), 0, sizeof(cmd.rootfs.init));
+	memset(&(cmd.rootfs.fstype), 0, sizeof(cmd.rootfs.fstype));
 	ret = rootfs_cmd_setup(&cmd);
 	if(ret < 0)
 		return ret;
