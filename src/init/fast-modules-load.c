@@ -116,7 +116,7 @@ static int module_insert_modules(struct kmod_ctx *ctx, char *module)
 
 	ret = kmod_module_new_from_path(ctx, path, &kmod);
 	if(ret) {
-		log_error("Get kmod failed: %d\n", ret);
+		log_error("Get kmod %s failed: %d\n", path, ret);
 		return ret;
 	}
 
