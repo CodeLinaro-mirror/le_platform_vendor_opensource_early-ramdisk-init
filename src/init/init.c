@@ -331,6 +331,7 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 
 	strlcpy(rootfs->root, root_dev, strlen(root_dev) + 1);
 	free(root_dev);
+	rootfs->root_alias = 0;
 	return 0;
 }
 
@@ -554,8 +555,16 @@ TASKLET_DEFINE_CALL("dm_create_tasklet", dm_create_roots);
 int rootfs_wait_func(void *data)
 {
 	int count = 0;
+	int ret = 0;
 
 	for(; count < COND_CHECK_MAX; count++) {
+		if(cmd.rootfs.root_alias) {
+			ret = rootfs_alias_setup(&cmd.rootfs);
+			if(ret < 0) {
+				usleep(200);
+				continue;
+			}
+		}
 		if(!access(cmd.rootfs.root, F_OK))
 			break;
 		usleep(200);
