@@ -31,6 +31,8 @@
 #define PATH_PAD			128
 #define INIT_PATH_MAX			256
 
+static pthread_mutex_t path_lock;
+
 static void modules_load_kmod_log(void *data, int priority,
 		const char *file, int line, const char *fn,
 		const char *format, va_list args)
@@ -70,6 +72,8 @@ static char *module_get_abs_path(char *oldpath, int offset)
 	static const char *kerversion = NULL;
 	static int len;
 
+	pthread_mutex_lock(&path_lock);
+
 	if(!kerversion) {
 		if((ret = uname(&u)) < 0) {
 			log_error("uname failed: %d\n", ret);
@@ -87,6 +91,8 @@ static char *module_get_abs_path(char *oldpath, int offset)
 		prefix_path[len] = '/';
 		len++;
 	}
+
+	pthread_mutex_unlock(&path_lock);
 
 	if(len > offset) {
 		log_error("uname too long!\n");
@@ -370,6 +376,12 @@ int fast_modules_load(int load_mode)
 		goto thread_pool_fail;
 	}
 
+	ret = pthread_mutex_init(&path_lock, NULL);
+	if(ret != 0) {
+		log_error("path_lock init failed!\n");
+		goto thread_pool_fail;
+	}
+
 	conf_num = scandir(CONF_DIR_PATH, &conf_list, NULL, alphasort);
 	if(conf_num < 0) {
 		log_error("%s scandir failed!\n", CONF_DIR_PATH);
@@ -400,6 +412,7 @@ chdir_error:
 conf_dir_error:
 	thread_pool_stop(tp);
 	thread_pool_free(tp);
+	pthread_mutex_destroy(&path_lock);
 thread_pool_fail:
 get_ncpu_fail:
 	return ret;
