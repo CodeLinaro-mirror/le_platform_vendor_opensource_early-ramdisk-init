@@ -1,0 +1,9 @@
+kernel/drivers/phy/qualcomm/phy-qcom-qmp-usb.ko
+kernel/drivers/usb/dwc3/dwc3-qcom.ko
+kernel/drivers/usb/dwc3/dwc3.ko
+kernel/drivers/usb/storage/usb-storage.ko
+kernel/drivers/usb/storage/uas.ko
+kernel/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.ko
+kernel/drivers/spmi/spmi-pmic-arb.ko
+kernel/drivers/nvmem/nvmem_qcom-spmi-sdam.ko
+kernel/drivers/pinctrl/qcom/pinctrl-spmi-gpio.ko
