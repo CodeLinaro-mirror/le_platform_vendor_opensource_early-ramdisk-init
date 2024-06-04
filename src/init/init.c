@@ -238,9 +238,9 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char uuid_str[] = "PARTUUID=";
 	const char lable_str[] = "LABEL=";
 	const char partlable_str[] = "PARTLABEL=";
-	const char init_str[] = " init";
-	const char fstype_str[] = " rootfstype";
-	const char mode_str[] = " early-ramdisk.mode";
+	const char init_str[] = "init";
+	const char fstype_str[] = "rootfstype";
+	const char mode_str[] = "early-ramdisk.mode";
 	char mode[CMD_MAX] = {0};
 	char *buf = NULL;
 
