@@ -152,6 +152,44 @@ char *next_arg(char *args, char **param, char **val)
 	return skip_spaces(args);
 }
 
+/**
+ * dm_replace_partuuid_by_dev_num - Replace PARTUUID by Blkid.
+ * @cmd_partuuid: dm-table params from cmdline, it include PARTUUID.
+ * @cmd_new: a new dm-table params with Blkid.
+ *
+ */
+static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
+{
+	char *cmd_temp = cmd_partuuid;
+	int i=0,j=0;
+	char temp_all[CMD_MAX];
+	char temp_partuuid[CMD_MAX];
+	char *dev_num = NULL;
+
+	for(i=0; i<3; i++)
+	{
+		cmd_temp = strchr(cmd_temp, ' ');
+
+		if(i == 1){
+			for(j=0; ; j++){
+				temp_partuuid[j] = cmd_temp[j+1];
+				if(temp_partuuid[j] == ' '){
+					break;
+				}
+			}
+			temp_partuuid[j]='\0';
+		}
+		cmd_temp++;
+	}
+
+	dev_num = blkid_get_devname(NULL, temp_partuuid, NULL);
+	// get a new verity table
+	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
+	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
+
+	return;
+}
+
 static char *dm_table_parse_entry(struct dm_params *dm, char *entry)
 {
 	const unsigned int n = dm->target_count - 1;
@@ -503,6 +541,7 @@ int dm_create_roots(void *data)
 	char *dm_buffer = NULL;
 	struct dm_ioctl *ctl;
 	struct dm_target_spec *sp;
+	char dm_params_blkid[CMD_MAX];
 
 	if(!cmd.dm.enable)
 		return -EINVAL;
@@ -534,6 +573,9 @@ int dm_create_roots(void *data)
 	ctl->target_count = cmd.dm.target_count;
 	for(i = 0; i < ctl->target_count; i++) {
 		*sp = cmd.dm.sp[i];
+		log_kmsg("Update verity table from PARTUUID to blkid\n");
+		dm_replace_partuuid_by_dev_num(cmd.dm.target_args_array[i],dm_params_blkid);
+		cmd.dm.target_args_array[i] = dm_params_blkid;
 		sp++;
 		if(((char *)sp + strlen(cmd.dm.target_args_array[i]))
 					> (dm_buffer + DM_BUF_LEN)) {
