@@ -238,9 +238,9 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char uuid_str[] = "PARTUUID=";
 	const char lable_str[] = "LABEL=";
 	const char partlable_str[] = "PARTLABEL=";
-	const char init_str[] = " init";
-	const char fstype_str[] = " rootfstype";
-	const char mode_str[] = " early-ramdisk.mode";
+	const char init_str[] = "init";
+	const char fstype_str[] = "rootfstype";
+	const char mode_str[] = "early-ramdisk.mode";
 	char mode[CMD_MAX] = {0};
 	char *buf = NULL;
 
@@ -412,6 +412,32 @@ int main(int argc, char* argv[])
 				cmd.rootfs.flag, NULL)) {
 		log_kmsg("mount rootfs failed: %d\n", errno);
 		return errno;
+	}
+	// for erofs && avb disabled case, use overlayfs to make /root writable
+	if (!cmd.dm.enable && !strcmp(cmd.rootfs.fstype, "erofs"))
+	{
+		char *data_dev = NULL;
+		data_dev = blkid_get_devname(NULL, "PARTLABEL=userdata", NULL);
+		if(!data_dev) {
+			log_kmsg("Can't find userdata as writable backend\n");
+		}
+		ret = mount(data_dev, "/realroot/data", "ext4", MS_NODEV | MS_NOATIME, "discard");
+		if (ret < 0) {
+			log_kmsg("mount userdata %s failed errno is %d\n", data_dev, errno);
+		}
+		ret = mkdir("/realroot/data/overlay/", 0755) ||
+			mkdir("/realroot/data/overlay/upper", 0755) ||
+			mkdir("/realroot/data/overlay/workdir", 0755);
+		if (ret < 0) {
+			log_kmsg("Failed to prepare overlay folder, errno is %d\n", errno);
+		}
+		ret = mount("overlay", "/realroot", "overlay", MS_NOATIME, "lowerdir=/realroot,upperdir=/realroot/data/overlay/upper/,workdir=/realroot/data/overlay/workdir");
+		if (ret < 0) {
+			log_kmsg("mount overlayfs %s failed errno is %d\n", data_dev, errno);
+		}
+		else {
+			log_kmsg("mount overlayfs %s done\n", cmd.rootfs.fstype);
+		}
 	}
 
 	snprintf(real_log, CMD_MAX, "/realroot%s", LOG_DIR);
