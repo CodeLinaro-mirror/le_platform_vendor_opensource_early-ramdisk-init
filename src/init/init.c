@@ -42,6 +42,9 @@
 #define DM_BUF_LEN				1024
 #define DM_MAX_TARGETS			5
 
+//Put right system_* info here can save aroung ~60ms bootkpi
+static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
+
 struct rootfs_params {
 	char root[CMD_MAX];
 	char fstype[CMD_MAX];
@@ -200,7 +203,9 @@ static char* get_device_name(char* token)
 	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) ||
 		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
 		glob_t block_device_list;
-		glob("/dev/sd*",0 , NULL, &block_device_list);
+
+		for (size_t  i = 0; i < (sizeof(ufs_patterns)/sizeof(ufs_patterns[0])); ++i)
+			glob(ufs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
 		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
 			if (find_the_device(block_device_list.gl_pathv[i], token)) {
 				dev = strdup(block_device_list.gl_pathv[i]);
