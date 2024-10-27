@@ -21,6 +21,7 @@
 #include <linux/dm-ioctl.h>
 #include <blkid/blkid.h>
 #include <ctype.h>
+#include <glob.h>
 
 #include "utils.h"
 #include "init.h"
@@ -40,6 +41,9 @@
 #define FS_RW					1
 #define DM_BUF_LEN				1024
 #define DM_MAX_TARGETS			5
+
+//Put right system_* info here can save aroung ~60ms bootkpi
+static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
 
 struct rootfs_params {
 	char root[CMD_MAX];
@@ -152,6 +156,71 @@ char *next_arg(char *args, char **param, char **val)
 	return skip_spaces(args);
 }
 
+static bool find_the_device(char* devname, char* token)
+{
+	bool ret = false;
+	blkid_probe probe = blkid_new_probe();
+	if (!probe)
+	{
+		log_kmsg("blkid_new_probe failed");
+		goto out;
+	}
+	blkid_probe_enable_superblocks(probe, 0);
+	blkid_probe_enable_partitions(probe, 1);
+	blkid_probe_set_partitions_flags(probe, BLKID_PARTS_ENTRY_DETAILS);
+	int fd = open(devname, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+	{
+		log_kmsg("open device %s failed, errno %d\n", devname, errno);
+		goto out;
+	}
+	blkid_probe_set_device(probe, fd, 0, 0);
+	int rc = blkid_do_safeprobe(probe);
+	if (rc)
+	{
+		log_kmsg("blkid_do_safeprobe failed");
+		goto out;
+	}
+	char* val;
+	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) &&
+			!blkid_probe_lookup_value (probe, "PART_ENTRY_UUID", &val, NULL) &&
+			!strncmp (val, (token + sizeof ("PARTUUID")), strlen(val)))
+		ret = true;
+	else if (!strncmp(token, "PARTLABEL", strlen("PARTLABEL")) &&
+			!blkid_probe_lookup_value (probe, "PART_ENTRY_NAME", &val, NULL) &&
+			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
+		ret = true;
+out:
+	if (probe)
+		blkid_free_probe(probe);
+	safe_close(fd);
+	return ret;
+}
+
+static char* get_device_name(char* token)
+{
+	char* dev = NULL;
+	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) ||
+		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
+		glob_t block_device_list;
+
+		for (size_t  i = 0; i < (sizeof(ufs_patterns)/sizeof(ufs_patterns[0])); ++i)
+			glob(ufs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
+		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
+			if (find_the_device(block_device_list.gl_pathv[i], token)) {
+				dev = strdup(block_device_list.gl_pathv[i]);
+				break;
+			}
+		}
+		globfree(&block_device_list);
+	}
+	else {
+		//Slow path
+		dev = strdup(blkid_get_devname(NULL, token, NULL));
+	}
+	return dev;
+}
+
 /**
  * dm_replace_partuuid_by_dev_num - Replace PARTUUID by Blkid.
  * @cmd_partuuid: dm-table params from cmdline, it include PARTUUID.
@@ -182,7 +251,7 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		cmd_temp++;
 	}
 
-	dev_num = blkid_get_devname(NULL, temp_partuuid, NULL);
+	dev_num = get_device_name(temp_partuuid);
 	// get a new verity table
 	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
@@ -361,7 +430,7 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 {
 	char *root_dev = NULL;
 
-	root_dev = blkid_get_devname(NULL, rootfs->root, NULL);
+	root_dev = get_device_name(rootfs->root);
 	if(!root_dev) {
 		log_kmsg("Can't find rootfs device: %s\n", rootfs->root);
 		return -EINVAL;
@@ -372,6 +441,7 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 	rootfs->root_alias = 0;
 	return 0;
 }
+
 
 static int mount_setup(void)
 {
