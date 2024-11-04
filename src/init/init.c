@@ -68,6 +68,7 @@ struct dm_params {
 struct cmd_params {
 	struct rootfs_params rootfs;
 	struct dm_params dm;
+	char slot_suffix[2];
 	int mode;
 };
 
@@ -348,6 +349,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char init_str[] = "init";
 	const char fstype_str[] = "rootfstype";
 	const char mode_str[] = "early-ramdisk.mode";
+	const char slot_str[] = "androidboot.slot_suffix";
 	char mode[CMD_MAX] = {0};
 	char *buf = NULL;
 
@@ -394,6 +396,8 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 				cmd->mode = 0;
 			}
 		}
+		if (!strcmp(param, slot_str) && val)
+			ret = strlcpy(cmd->slot_suffix, val, strlen(val) + 1);
 		if (!strcmp(param, "ro")) {
 			cmd->rootfs.flag |= MS_RDONLY;
 		}
@@ -579,6 +583,29 @@ int main(int argc, char* argv[])
 	else if(pid == 0) {
 		execl("/usr/sbin/early_init", "/usr/sbin/early_init", NULL);
 		return 0;
+	}
+#endif
+
+#ifdef VFIO_BIND_DEVICE
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork process for vfio bind device fail\n");
+	else if(pid == 0) {
+		char* vfio_name = "/sys/module/vfio";
+		int fd = 0;
+		for (int i = 0; i < 100; ++i) {
+			fd = access(vfio_name, F_OK);
+			if (fd < 0) {
+				log_kmsg("access path %s failed, errno %d\n", vfio_name, errno);
+				usleep(5000);
+			}
+			else
+				break;
+		}
+		log_kmsg("run vfio-device-bind.sh start\n");
+		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
+			log_kmsg("run vfio-device-bind.sh fail\n");
+		exit(0);
 	}
 #endif
 
