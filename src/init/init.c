@@ -21,6 +21,7 @@
 #include <linux/dm-ioctl.h>
 #include <blkid/blkid.h>
 #include <ctype.h>
+#include <glob.h>
 
 #include "utils.h"
 #include "init.h"
@@ -40,6 +41,9 @@
 #define FS_RW					1
 #define DM_BUF_LEN				1024
 #define DM_MAX_TARGETS			5
+
+//Put right system_* info here can save aroung ~60ms bootkpi
+static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
 
 struct rootfs_params {
 	char root[CMD_MAX];
@@ -64,6 +68,7 @@ struct dm_params {
 struct cmd_params {
 	struct rootfs_params rootfs;
 	struct dm_params dm;
+	char slot_suffix[2];
 	int mode;
 };
 
@@ -152,6 +157,71 @@ char *next_arg(char *args, char **param, char **val)
 	return skip_spaces(args);
 }
 
+static bool find_the_device(char* devname, char* token)
+{
+	bool ret = false;
+	blkid_probe probe = blkid_new_probe();
+	if (!probe)
+	{
+		log_kmsg("blkid_new_probe failed");
+		goto out;
+	}
+	blkid_probe_enable_superblocks(probe, 0);
+	blkid_probe_enable_partitions(probe, 1);
+	blkid_probe_set_partitions_flags(probe, BLKID_PARTS_ENTRY_DETAILS);
+	int fd = open(devname, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+	{
+		log_kmsg("open device %s failed, errno %d\n", devname, errno);
+		goto out;
+	}
+	blkid_probe_set_device(probe, fd, 0, 0);
+	int rc = blkid_do_safeprobe(probe);
+	if (rc)
+	{
+		log_kmsg("blkid_do_safeprobe failed");
+		goto out;
+	}
+	char* val;
+	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) &&
+			!blkid_probe_lookup_value (probe, "PART_ENTRY_UUID", &val, NULL) &&
+			!strncmp (val, (token + sizeof ("PARTUUID")), strlen(val)))
+		ret = true;
+	else if (!strncmp(token, "PARTLABEL", strlen("PARTLABEL")) &&
+			!blkid_probe_lookup_value (probe, "PART_ENTRY_NAME", &val, NULL) &&
+			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
+		ret = true;
+out:
+	if (probe)
+		blkid_free_probe(probe);
+	safe_close(fd);
+	return ret;
+}
+
+static char* get_device_name(char* token)
+{
+	char* dev = NULL;
+	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) ||
+		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
+		glob_t block_device_list;
+
+		for (size_t  i = 0; i < (sizeof(ufs_patterns)/sizeof(ufs_patterns[0])); ++i)
+			glob(ufs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
+		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
+			if (find_the_device(block_device_list.gl_pathv[i], token)) {
+				dev = strdup(block_device_list.gl_pathv[i]);
+				break;
+			}
+		}
+		globfree(&block_device_list);
+	}
+	else {
+		//Slow path
+		dev = strdup(blkid_get_devname(NULL, token, NULL));
+	}
+	return dev;
+}
+
 /**
  * dm_replace_partuuid_by_dev_num - Replace PARTUUID by Blkid.
  * @cmd_partuuid: dm-table params from cmdline, it include PARTUUID.
@@ -182,7 +252,7 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		cmd_temp++;
 	}
 
-	dev_num = blkid_get_devname(NULL, temp_partuuid, NULL);
+	dev_num = get_device_name(temp_partuuid);
 	// get a new verity table
 	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
@@ -279,6 +349,7 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char init_str[] = "init";
 	const char fstype_str[] = "rootfstype";
 	const char mode_str[] = "early-ramdisk.mode";
+	const char slot_str[] = "androidboot.slot_suffix";
 	char mode[CMD_MAX] = {0};
 	char *buf = NULL;
 
@@ -325,6 +396,8 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 				cmd->mode = 0;
 			}
 		}
+		if (!strcmp(param, slot_str) && val)
+			ret = strlcpy(cmd->slot_suffix, val, strlen(val) + 1);
 		if (!strcmp(param, "ro")) {
 			cmd->rootfs.flag |= MS_RDONLY;
 		}
@@ -361,7 +434,7 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 {
 	char *root_dev = NULL;
 
-	root_dev = blkid_get_devname(NULL, rootfs->root, NULL);
+	root_dev = get_device_name(rootfs->root);
 	if(!root_dev) {
 		log_kmsg("Can't find rootfs device: %s\n", rootfs->root);
 		return -EINVAL;
@@ -372,6 +445,7 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 	rootfs->root_alias = 0;
 	return 0;
 }
+
 
 static int mount_setup(void)
 {
@@ -509,6 +583,29 @@ int main(int argc, char* argv[])
 	else if(pid == 0) {
 		execl("/usr/sbin/early_init", "/usr/sbin/early_init", NULL);
 		return 0;
+	}
+#endif
+
+#ifdef VFIO_BIND_DEVICE
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork process for vfio bind device fail\n");
+	else if(pid == 0) {
+		char* vfio_name = "/sys/module/vfio";
+		int fd = 0;
+		for (int i = 0; i < 100; ++i) {
+			fd = access(vfio_name, F_OK);
+			if (fd < 0) {
+				log_kmsg("access path %s failed, errno %d\n", vfio_name, errno);
+				usleep(5000);
+			}
+			else
+				break;
+		}
+		log_kmsg("run vfio-device-bind.sh start\n");
+		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
+			log_kmsg("run vfio-device-bind.sh fail\n");
+		exit(0);
 	}
 #endif
 
