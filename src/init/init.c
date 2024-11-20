@@ -45,6 +45,8 @@
 //Put right system_* info here can save aroung ~60ms bootkpi
 static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
+
 struct rootfs_params {
 	char root[CMD_MAX];
 	char fstype[CMD_MAX];
@@ -73,6 +75,28 @@ struct cmd_params {
 };
 
 static struct cmd_params cmd;
+
+struct MountPoint {
+	const char *name;
+	const char *where;
+	const char *type;
+	unsigned long flags;
+	const char *options;
+};
+
+struct MountPoint mount_table[] = {
+#ifdef FIRMWARE_MOUNT
+	{"PARTLABEL=modem_a", "/firmware", "vfat", 0, ""},
+	{"PARTLABEL=modem_b", "/firmware", "vfat", 0, ""},
+	{"PARTLABEL=modem_a", "/firmware/qcom/sa8775p", "vfat", 0, ""},
+	{"PARTLABEL=modem_b", "/firmware/qcom/sa8775p", "vfat", 0, ""},
+#endif
+
+#ifdef VENDOR_DSP_MOUNT
+	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
+	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
+#endif
+};
 
 static void inline write_marker(const char* name)
 {
@@ -478,6 +502,67 @@ static void mount_unsetup(void)
 	umount("/dev");
 }
 
+static void early_mount(void) {
+	log_kmsg("early_mount called\n");
+	pid_t pid;
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork mount process failed\n");
+	else if(pid == 0) {
+		char* device = NULL;
+		char* device_name = "/dev/sde12";
+		int fd = 0;
+
+		for (int i = 0; i < 100; i++) {
+			fd = access(device_name, F_OK);
+			if (fd < 0) {
+				log_kmsg("access path %s failed, errno %d\n", device_name, errno);
+				usleep(5000);
+			}
+			else
+				break;
+		}
+
+		int mount_start = 0;
+		int retry_time = 0;
+		!strncmp(cmd.slot_suffix, "_a", strlen("_a")) ? (mount_start=0) : (mount_start=1);
+
+		for (int j = mount_start; j < ARRAY_SIZE(mount_table); j = j + 2) {
+			device = get_device_name(mount_table[j].name);
+			log_kmsg("Found the name %s, by device %s\n", mount_table[j].name, device);
+
+#ifdef FIRMWARE_MOUNT
+			if (!strncmp(mount_table[j].where, "/firmware/qcom/sa8775p", strlen("/firmware/qcom/sa8775p"))) {
+				int ret=0;
+				if (access("/firmware/qcom", F_OK) < 0)
+					ret = mkdir("/firmware/qcom/", 0755) || mkdir("/firmware/qcom/sa8775p", 0755);
+				else if (access("/firmware/qcom/sa8775p", F_OK) < 0)
+					ret = mkdir("/firmware/qcom/sa8775p", 0755);
+
+				if (ret != 0)
+					log_kmsg("Failed to prepare /firmware/qcom/sa8775p folder, errno is %d\n", errno);
+			}
+#endif
+
+retry:
+			if (mount(device, mount_table[j].where, mount_table[j].type, mount_table[j].flags, mount_table[j].options)) {
+				log_kmsg("mount %s failed errno %d\n", mount_table[j].where, errno);
+#ifdef VENDOR_DSP_MOUNT
+				if ((errno == 22) && (retry_time < 100)) {
+					retry_time++;
+					usleep(5000);
+					goto retry;
+				}
+#endif
+			}
+			else
+				log_kmsg("mount %s success\n", mount_table[j].where);
+		}
+		exit(0);
+	}
+	return;
+}
+
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -540,7 +625,7 @@ int main(int argc, char* argv[])
 		ret = mkdir("/realroot/data/overlay/", 0755) ||
 			mkdir("/realroot/data/overlay/upper", 0755) ||
 			mkdir("/realroot/data/overlay/workdir", 0755);
-		if (ret < 0) {
+		if (ret != 0) {
 			log_kmsg("Failed to prepare overlay folder, errno is %d\n", errno);
 		}
 		ret = mount("overlay", "/realroot", "overlay", MS_NOATIME, "lowerdir=/realroot,upperdir=/realroot/data/overlay/upper/,workdir=/realroot/data/overlay/workdir");
@@ -611,6 +696,11 @@ int main(int argc, char* argv[])
 
 	log_close();
 	mount_unsetup();
+
+#if defined(VENDOR_DSP_MOUNT) || defined(FIRMWARE_MOUNT)
+	early_mount();
+#endif
+
 	if(execl(cmd.rootfs.init, cmd.rootfs.init, NULL)) {
 		return errno;
 	}
