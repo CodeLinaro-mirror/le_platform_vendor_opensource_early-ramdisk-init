@@ -315,7 +315,9 @@ static void thread_modules_load(void *arg1, void *arg2)
 		case 'A' ... 'Z':
 		case 'a' ... 'z':
 		case '/':
+			log_kmsg("insert: %s in config %s\n", pline, name);
 			ret = module_insert_modules(ctx, line);
+			log_kmsg("inserted: %s in config %s\n", pline, name);
 			if(ret)
 				log_error("insert %s failed: %d\n", pline, ret);
 			break;
