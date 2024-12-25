@@ -270,7 +270,7 @@ static int module_run_tasklet(char *task)
 
 static void thread_modules_load(void *arg1, void *arg2)
 {
-	struct kmod_ctx *ctx = (struct kmod_ctx *)arg1;
+	struct kmod_ctx *ctx = NULL;
 	char *name = (char *)arg2;
 	char line[MODULE_LINE_MAX + PATH_PAD] = {0};
 	char *pline;
@@ -281,9 +281,20 @@ static void thread_modules_load(void *arg1, void *arg2)
 
 	log_info("config file: %s\n", name);
 
+	/* Create ctx per thread */
+	ctx = kmod_new(NULL, NULL);
+	if(!ctx) {
+		log_error("thread_modules_load:%s: Failed to allocate memory for kmod\n", name);
+		return;
+	}
+
+	kmod_load_resources(ctx);
+	kmod_set_log_fn(ctx, modules_load_kmod_log, NULL);
+
 	f = fopen(name, "r");
 	if(f == NULL) {
 		log_error("%s open failed!\n", name);
+		kmod_unref(ctx);
 		return;
 	}
 
@@ -291,6 +302,7 @@ static void thread_modules_load(void *arg1, void *arg2)
 	if(ftell(f)<= 0) {
 		log_error("%s: Wrong Size!\n", name);
 		fclose(f);
+		kmod_unref(ctx);
 		return;
 	}
 	rewind(f);
@@ -338,25 +350,16 @@ static void thread_modules_load(void *arg1, void *arg2)
 
 	log_info("config %s load done\n", name);
 	fclose(f);
+	kmod_unref(ctx);
 }
 
 int fast_modules_load(int load_mode)
 {
-	struct kmod_ctx *ctx = NULL;
 	thread_pool_t *tp = NULL;
 	struct dirent **conf_list;
 	int i, conf_num;
 	int ret = 0;
 	int ncpus = 1;
-
-	ctx = kmod_new(NULL, NULL);
-	if(!ctx) {
-		log_error("Failed to allocate memory for kmod\n");
-		return -ENOMEM;
-	}
-
-	kmod_load_resources(ctx);
-	kmod_set_log_fn(ctx, modules_load_kmod_log, NULL);
 
 	if(load_mode) {
 		ncpus = get_nprocs_conf();
@@ -399,7 +402,7 @@ int fast_modules_load(int load_mode)
 			continue;
 		}
 
-		thread_pool_add_task(tp, thread_modules_load, ctx, conf_list[i]->d_name);
+		thread_pool_add_task(tp, thread_modules_load, NULL, conf_list[i]->d_name);
 	}
 
 	thread_pool_wait_finish(tp);
@@ -412,6 +415,5 @@ conf_dir_error:
 	pthread_mutex_destroy(&path_lock);
 thread_pool_fail:
 get_ncpu_fail:
-	kmod_unref(ctx);
 	return ret;
 }
