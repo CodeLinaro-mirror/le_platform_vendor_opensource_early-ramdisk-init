@@ -57,21 +57,23 @@ struct rootfs_params {
 
 struct dm_params {
 	char buf[CMD_MAX];
-	bool enable;
 	char *name;
 	char *uuid;
 	char *minor;
-	int  flags;
 	struct dm_target_spec sp[DM_MAX_TARGETS];
 	char *target_args_array[DM_MAX_TARGETS];
 	int target_count;
+	int  flags;
+	bool enable;
+	char reserved[7];
 };
 
 struct cmd_params {
 	struct rootfs_params rootfs;
 	struct dm_params dm;
-	char slot_suffix[2];
+	char slot_suffix[8];
 	int mode;
+	int reserved;
 };
 
 static struct cmd_params cmd;
