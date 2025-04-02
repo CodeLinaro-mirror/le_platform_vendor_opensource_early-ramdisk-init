@@ -31,6 +31,8 @@
 #define PATH_PAD			128
 #define INIT_PATH_MAX			256
 
+static pthread_mutex_t path_lock;
+
 static void modules_load_kmod_log(void *data, int priority,
 		const char *file, int line, const char *fn,
 		const char *format, va_list args)
@@ -70,6 +72,8 @@ static char *module_get_abs_path(char *oldpath, int offset)
 	static const char *kerversion = NULL;
 	static int len;
 
+	pthread_mutex_lock(&path_lock);
+
 	if(!kerversion) {
 		if((ret = uname(&u)) < 0) {
 			log_error("uname failed: %d\n", ret);
@@ -87,6 +91,8 @@ static char *module_get_abs_path(char *oldpath, int offset)
 		prefix_path[len] = '/';
 		len++;
 	}
+
+	pthread_mutex_unlock(&path_lock);
 
 	if(len > offset) {
 		log_error("uname too long!\n");
@@ -264,7 +270,7 @@ static int module_run_tasklet(char *task)
 
 static void thread_modules_load(void *arg1, void *arg2)
 {
-	struct kmod_ctx *ctx = (struct kmod_ctx *)arg1;
+	struct kmod_ctx *ctx = NULL;
 	char *name = (char *)arg2;
 	char line[MODULE_LINE_MAX + PATH_PAD] = {0};
 	char *pline;
@@ -275,9 +281,20 @@ static void thread_modules_load(void *arg1, void *arg2)
 
 	log_info("config file: %s\n", name);
 
+	/* Create ctx per thread */
+	ctx = kmod_new(NULL, NULL);
+	if(!ctx) {
+		log_error("thread_modules_load:%s: Failed to allocate memory for kmod\n", name);
+		return;
+	}
+
+	kmod_load_resources(ctx);
+	kmod_set_log_fn(ctx, modules_load_kmod_log, NULL);
+
 	f = fopen(name, "r");
 	if(f == NULL) {
 		log_error("%s open failed!\n", name);
+		kmod_unref(ctx);
 		return;
 	}
 
@@ -285,6 +302,7 @@ static void thread_modules_load(void *arg1, void *arg2)
 	if(ftell(f)<= 0) {
 		log_error("%s: Wrong Size!\n", name);
 		fclose(f);
+		kmod_unref(ctx);
 		return;
 	}
 	rewind(f);
@@ -297,7 +315,9 @@ static void thread_modules_load(void *arg1, void *arg2)
 		case 'A' ... 'Z':
 		case 'a' ... 'z':
 		case '/':
+			log_kmsg("insert: %s in config %s\n", pline, name);
 			ret = module_insert_modules(ctx, line);
+			log_kmsg("inserted: %s in config %s\n", pline, name);
 			if(ret)
 				log_error("insert %s failed: %d\n", pline, ret);
 			break;
@@ -332,25 +352,16 @@ static void thread_modules_load(void *arg1, void *arg2)
 
 	log_info("config %s load done\n", name);
 	fclose(f);
+	kmod_unref(ctx);
 }
 
 int fast_modules_load(int load_mode)
 {
-	struct kmod_ctx *ctx = NULL;
 	thread_pool_t *tp = NULL;
 	struct dirent **conf_list;
 	int i, conf_num;
 	int ret = 0;
 	int ncpus = 1;
-
-	ctx = kmod_new(NULL, NULL);
-	if(!ctx) {
-		log_error("Failed to allocate memory for kmod\n");
-		return -ENOMEM;
-	}
-
-	kmod_load_resources(ctx);
-	kmod_set_log_fn(ctx, modules_load_kmod_log, NULL);
 
 	if(load_mode) {
 		ncpus = get_nprocs_conf();
@@ -364,6 +375,12 @@ int fast_modules_load(int load_mode)
 	if(!tp) {
 		log_error("Thread pool init failed!\n");
 		ret = -ENOMEM;
+		goto thread_pool_fail;
+	}
+
+	ret = pthread_mutex_init(&path_lock, NULL);
+	if(ret != 0) {
+		log_error("path_lock init failed!\n");
 		goto thread_pool_fail;
 	}
 
@@ -387,7 +404,7 @@ int fast_modules_load(int load_mode)
 			continue;
 		}
 
-		thread_pool_add_task(tp, thread_modules_load, ctx, conf_list[i]->d_name);
+		thread_pool_add_task(tp, thread_modules_load, NULL, conf_list[i]->d_name);
 	}
 
 	thread_pool_wait_finish(tp);
@@ -397,8 +414,8 @@ chdir_error:
 conf_dir_error:
 	thread_pool_stop(tp);
 	thread_pool_free(tp);
+	pthread_mutex_destroy(&path_lock);
 thread_pool_fail:
 get_ncpu_fail:
-	kmod_unref(ctx);
 	return ret;
 }
