@@ -25,6 +25,7 @@
 
 #include "utils.h"
 #include "init.h"
+#include <dirent.h>
 
 #define KPI_VALUE_PATH          "/sys/kernel/boot_kpi/kpi_values"
 #define LOG_PATH				LOG_DIR"/early_ramdisk_init.log"
@@ -566,6 +567,49 @@ retry:
 	return;
 }
 
+#ifdef PRELOAD_UNIT
+static void preload_unit(unsigned char* type, char* name) {
+	FILE *f;
+	char buff[1024];
+
+	if(type == DT_DIR) {
+		struct dirent **conf_list;
+		int conf_num;
+		int i = 0;
+
+		conf_num = scandir(name, &conf_list, NULL, alphasort);
+		if(conf_num < 0) {
+			log_error("preload %s scandir failed!\n", name);
+			free(conf_list);
+			return;
+		}
+
+		for(i = 2; i < conf_num; i++){
+			char name_sub[150]={'\0'};
+			strlcpy(name_sub, name, strlen(name)+1);
+			name_sub[strlen(name_sub)] = '/';
+			name_sub[strlen(name_sub)+1] = '\0';
+			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
+
+			preload_unit(conf_list[i]->d_type, name_sub);
+		}
+
+	}
+
+	f = fopen(name, "r");
+	if(f == NULL) {
+		log_error("preload %s open failed!\n", name);
+		return;
+	}
+
+	fread(buff, 1, sizeof(buff), f);
+
+	fclose(f);
+
+	return;
+}
+#endif
+
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -694,6 +738,46 @@ int main(int argc, char* argv[])
 		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
 			log_kmsg("run vfio-device-bind.sh fail\n");
 		exit(0);
+	}
+#endif
+
+#ifdef PRELOAD_UNIT
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork preload process failed\n");
+	else if(pid == 0) {
+		log_kmsg("created preload process\n");
+		struct dirent **conf_list;
+		int conf_num;
+		int ret = 0;
+		int j = 0;
+
+		char *load_path[] = {"/lib/systemd/system/", "/etc/systemd/system/"};
+
+		for (size_t  n = 0; n < (sizeof(load_path)/sizeof(load_path[0])); ++n) {
+			log_kmsg("preload units in %s\n", load_path[n]);
+			conf_num = scandir(load_path[n], &conf_list, NULL, alphasort);
+			if(conf_num < 0) {
+				log_error("%s preload scandir failed!\n", load_path[n]);
+				free(conf_list);
+				continue;
+			}
+
+			ret = chdir(load_path[n]);
+			if(ret) {
+				log_error("%s preload chdir failed!\n", load_path[n]);
+				free(conf_list);
+				continue;
+			}
+
+			for(j = 2; j < conf_num; j++){
+				preload_unit(conf_list[j]->d_type, conf_list[j]->d_name);
+			}
+		}
+
+		log_kmsg("finish preload files");
+
+		return 0;
 	}
 #endif
 
