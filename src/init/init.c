@@ -43,7 +43,7 @@
 #define DM_MAX_TARGETS			5
 
 //Put right system_* info here can save aroung ~60ms bootkpi
-static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
+static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
@@ -57,21 +57,23 @@ struct rootfs_params {
 
 struct dm_params {
 	char buf[CMD_MAX];
-	bool enable;
 	char *name;
 	char *uuid;
 	char *minor;
-	int  flags;
 	struct dm_target_spec sp[DM_MAX_TARGETS];
 	char *target_args_array[DM_MAX_TARGETS];
 	int target_count;
+	int  flags;
+	bool enable;
+	char reserved[7];
 };
 
 struct cmd_params {
 	struct rootfs_params rootfs;
 	struct dm_params dm;
-	char slot_suffix[2];
+	char slot_suffix[8];
 	int mode;
+	int reserved;
 };
 
 static struct cmd_params cmd;
@@ -229,8 +231,8 @@ static char* get_device_name(char* token)
 		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
 		glob_t block_device_list;
 
-		for (size_t  i = 0; i < (sizeof(ufs_patterns)/sizeof(ufs_patterns[0])); ++i)
-			glob(ufs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
+		for (size_t  i = 0; i < (sizeof(rootfs_patterns)/sizeof(rootfs_patterns[0])); ++i)
+			glob(rootfs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
 		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
 			if (find_the_device(block_device_list.gl_pathv[i], token)) {
 				dev = strdup(block_device_list.gl_pathv[i]);
@@ -239,7 +241,8 @@ static char* get_device_name(char* token)
 		}
 		globfree(&block_device_list);
 	}
-	else {
+
+	if(!dev) {
 		//Slow path
 		dev = strdup(blkid_get_devname(NULL, token, NULL));
 	}
