@@ -245,7 +245,7 @@ static char* get_device_name(char* token)
 
 	if(!dev) {
 		//Slow path
-		dev = strdup(blkid_get_devname(NULL, token, NULL));
+		dev = blkid_get_devname(NULL, token, NULL);
 	}
 	return dev;
 }
