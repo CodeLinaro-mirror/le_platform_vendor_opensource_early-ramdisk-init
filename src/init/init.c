@@ -245,7 +245,7 @@ static char* get_device_name(char* token)
 
 	if(!dev) {
 		//Slow path
-		dev = strdup(blkid_get_devname(NULL, token, NULL));
+		dev = blkid_get_devname(NULL, token, NULL);
 	}
 	return dev;
 }
@@ -737,7 +737,32 @@ int main(int argc, char* argv[])
 		log_kmsg("run vfio-device-bind.sh start\n");
 		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
 			log_kmsg("run vfio-device-bind.sh fail\n");
-		exit(0);
+
+		return 0;
+	}
+#endif
+
+#ifdef MM_VFIO_BIND_DEVICE
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork process for mm vfio bind device fail\n");
+	else if(pid == 0) {
+		char* vfio_mm_name = "/sys/module/vfio";
+		int fd_mm = 0;
+		for (int i = 0; i < 100; ++i) {
+			fd_mm = access(vfio_mm_name, F_OK);
+			if (fd_mm < 0) {
+				log_kmsg("access path %s failed, errno %d\n", vfio_mm_name, errno);
+				usleep(5000);
+			}
+			else
+				break;
+		}
+		log_kmsg("run mm-vfio-device-bind.sh start\n");
+		if (execl("/bin/sh", "sh", "/usr/bin/mm-vfio-device-bind.sh", NULL) < 0)
+			log_kmsg("run mm-vfio-device-bind.sh fail\n");
+
+		return 0;
 	}
 #endif
 
