@@ -25,6 +25,7 @@
 
 #include "utils.h"
 #include "init.h"
+#include <dirent.h>
 
 #define KPI_VALUE_PATH          "/sys/kernel/boot_kpi/kpi_values"
 #define LOG_PATH				LOG_DIR"/early_ramdisk_init.log"
@@ -43,7 +44,7 @@
 #define DM_MAX_TARGETS			5
 
 //Put right system_* info here can save aroung ~60ms bootkpi
-static const char *ufs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*"};
+static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
@@ -57,21 +58,23 @@ struct rootfs_params {
 
 struct dm_params {
 	char buf[CMD_MAX];
-	bool enable;
 	char *name;
 	char *uuid;
 	char *minor;
-	int  flags;
 	struct dm_target_spec sp[DM_MAX_TARGETS];
 	char *target_args_array[DM_MAX_TARGETS];
 	int target_count;
+	int  flags;
+	bool enable;
+	char reserved[7];
 };
 
 struct cmd_params {
 	struct rootfs_params rootfs;
 	struct dm_params dm;
-	char slot_suffix[2];
+	char slot_suffix[8];
 	int mode;
+	int reserved;
 };
 
 static struct cmd_params cmd;
@@ -229,8 +232,8 @@ static char* get_device_name(char* token)
 		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
 		glob_t block_device_list;
 
-		for (size_t  i = 0; i < (sizeof(ufs_patterns)/sizeof(ufs_patterns[0])); ++i)
-			glob(ufs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
+		for (size_t  i = 0; i < (sizeof(rootfs_patterns)/sizeof(rootfs_patterns[0])); ++i)
+			glob(rootfs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
 		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
 			if (find_the_device(block_device_list.gl_pathv[i], token)) {
 				dev = strdup(block_device_list.gl_pathv[i]);
@@ -239,9 +242,10 @@ static char* get_device_name(char* token)
 		}
 		globfree(&block_device_list);
 	}
-	else {
+
+	if(!dev) {
 		//Slow path
-		dev = strdup(blkid_get_devname(NULL, token, NULL));
+		dev = blkid_get_devname(NULL, token, NULL);
 	}
 	return dev;
 }
@@ -563,6 +567,49 @@ retry:
 	return;
 }
 
+#ifdef PRELOAD_UNIT
+static void preload_unit(unsigned char* type, char* name) {
+	FILE *f;
+	char buff[1024];
+
+	if(type == DT_DIR) {
+		struct dirent **conf_list;
+		int conf_num;
+		int i = 0;
+
+		conf_num = scandir(name, &conf_list, NULL, alphasort);
+		if(conf_num < 0) {
+			log_error("preload %s scandir failed!\n", name);
+			free(conf_list);
+			return;
+		}
+
+		for(i = 2; i < conf_num; i++){
+			char name_sub[150]={'\0'};
+			strlcpy(name_sub, name, strlen(name)+1);
+			name_sub[strlen(name_sub)] = '/';
+			name_sub[strlen(name_sub)+1] = '\0';
+			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
+
+			preload_unit(conf_list[i]->d_type, name_sub);
+		}
+
+	}
+
+	f = fopen(name, "r");
+	if(f == NULL) {
+		log_error("preload %s open failed!\n", name);
+		return;
+	}
+
+	fread(buff, 1, sizeof(buff), f);
+
+	fclose(f);
+
+	return;
+}
+#endif
+
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -690,7 +737,72 @@ int main(int argc, char* argv[])
 		log_kmsg("run vfio-device-bind.sh start\n");
 		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
 			log_kmsg("run vfio-device-bind.sh fail\n");
-		exit(0);
+
+		return 0;
+	}
+#endif
+
+#ifdef MM_VFIO_BIND_DEVICE
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork process for mm vfio bind device fail\n");
+	else if(pid == 0) {
+		char* vfio_mm_name = "/sys/module/vfio";
+		int fd_mm = 0;
+		for (int i = 0; i < 100; ++i) {
+			fd_mm = access(vfio_mm_name, F_OK);
+			if (fd_mm < 0) {
+				log_kmsg("access path %s failed, errno %d\n", vfio_mm_name, errno);
+				usleep(5000);
+			}
+			else
+				break;
+		}
+		log_kmsg("run mm-vfio-device-bind.sh start\n");
+		if (execl("/bin/sh", "sh", "/usr/bin/mm-vfio-device-bind.sh", NULL) < 0)
+			log_kmsg("run mm-vfio-device-bind.sh fail\n");
+
+		return 0;
+	}
+#endif
+
+#ifdef PRELOAD_UNIT
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork preload process failed\n");
+	else if(pid == 0) {
+		log_kmsg("created preload process\n");
+		struct dirent **conf_list;
+		int conf_num;
+		int ret = 0;
+		int j = 0;
+
+		char *load_path[] = {"/lib/systemd/system/", "/etc/systemd/system/"};
+
+		for (size_t  n = 0; n < (sizeof(load_path)/sizeof(load_path[0])); ++n) {
+			log_kmsg("preload units in %s\n", load_path[n]);
+			conf_num = scandir(load_path[n], &conf_list, NULL, alphasort);
+			if(conf_num < 0) {
+				log_error("%s preload scandir failed!\n", load_path[n]);
+				free(conf_list);
+				continue;
+			}
+
+			ret = chdir(load_path[n]);
+			if(ret) {
+				log_error("%s preload chdir failed!\n", load_path[n]);
+				free(conf_list);
+				continue;
+			}
+
+			for(j = 2; j < conf_num; j++){
+				preload_unit(conf_list[j]->d_type, conf_list[j]->d_name);
+			}
+		}
+
+		log_kmsg("finish preload files");
+
+		return 0;
 	}
 #endif
 
