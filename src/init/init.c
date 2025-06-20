@@ -30,6 +30,7 @@
 #define KPI_VALUE_PATH          "/sys/kernel/boot_kpi/kpi_values"
 #define LOG_PATH				LOG_DIR"/early_ramdisk_init.log"
 #define DM_DEVICE				"/dev/mapper/control"
+#define FIRMWARE_MOUNT_DIR			"/lib/firmware/qcom"
 
 #define MSG_LEN					128
 #define NAME_MAX				128
@@ -89,10 +90,13 @@ struct MountPoint {
 
 struct MountPoint mount_table[] = {
 #ifdef FIRMWARE_MOUNT
+	// Legacy mount dir is /firmware. In later patches we may remove support
+	// of mounting modem to /firmware from early ramdisk
 	{"PARTLABEL=modem_a", "/firmware", "vfat", 0, ""},
 	{"PARTLABEL=modem_b", "/firmware", "vfat", 0, ""},
-	{"PARTLABEL=modem_a", "/firmware/qcom/sa8775p", "vfat", 0, ""},
-	{"PARTLABEL=modem_b", "/firmware/qcom/sa8775p", "vfat", 0, ""},
+	// New mount dir which conforms with Linux kernel's firmware search paths
+	{"PARTLABEL=modem_a", FIRMWARE_MOUNT_DIR, "vfat", 0, ""},
+	{"PARTLABEL=modem_b", FIRMWARE_MOUNT_DIR, "vfat", 0, ""},
 #endif
 
 #ifdef VENDOR_DSP_MOUNT
@@ -534,19 +538,6 @@ static void early_mount(void) {
 		for (int j = mount_start; j < ARRAY_SIZE(mount_table); j = j + 2) {
 			device = get_device_name(mount_table[j].name);
 			log_kmsg("Found the name %s, by device %s\n", mount_table[j].name, device);
-
-#ifdef FIRMWARE_MOUNT
-			if (!strncmp(mount_table[j].where, "/firmware/qcom/sa8775p", strlen("/firmware/qcom/sa8775p"))) {
-				int ret=0;
-				if (access("/firmware/qcom", F_OK) < 0)
-					ret = mkdir("/firmware/qcom/", 0755) || mkdir("/firmware/qcom/sa8775p", 0755);
-				else if (access("/firmware/qcom/sa8775p", F_OK) < 0)
-					ret = mkdir("/firmware/qcom/sa8775p", 0755);
-
-				if (ret != 0)
-					log_kmsg("Failed to prepare /firmware/qcom/sa8775p folder, errno is %d\n", errno);
-			}
-#endif
 
 retry:
 			if (mount(device, mount_table[j].where, mount_table[j].type, mount_table[j].flags, mount_table[j].options)) {
