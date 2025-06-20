@@ -280,7 +280,14 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		cmd_temp++;
 	}
 
-	dev_num = get_device_name(temp_partuuid);
+	for(i = 0; i < COND_CHECK_MAX; i++) {
+		dev_num = get_device_name(temp_partuuid);
+		if(dev_num){
+			log_kmsg("Wait for %s: %.1fms\n", dev_num, (i * 2) / 10.0);
+			break;
+		}
+		usleep(200);
+	}
 	// get a new verity table
 	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
@@ -860,12 +867,7 @@ int dm_create_roots(void *data)
 		sp = (struct dm_target_spec *)((char *)sp + strlen(cmd.dm.target_args_array[i]));
 	}
 
-	for(i = 0; i < COND_CHECK_MAX; i++) {
-		if((ret = ioctl(fd, DM_TABLE_LOAD, ctl)) == 0)
-			break;
-		usleep(200);
-	}
-
+	ret = ioctl(fd, DM_TABLE_LOAD, ctl);
 	if(ret) {
 		log_kmsg("Device mapper TABLE_LOAD failed: %d\n", ret);
 			goto load_fail;
