@@ -1,0 +1,9 @@
+kernel/drivers/soc/qcom/mdt_loader.ko
+extra/gh_msgq.ko
+extra/gh_dbl.ko
+extra/gh_arm_drv.ko
+extra/gh_rm_drv.ko
+extra/gunyah.ko
+extra/hvc_gunyah.ko
+extra/msm_hab.ko
+extra/hyp-udmabuf.ko
