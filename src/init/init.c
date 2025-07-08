@@ -44,7 +44,7 @@
 #define DM_MAX_TARGETS			5
 
 //Put right system_* info here can save aroung ~60ms bootkpi
-static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
+static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*8", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
