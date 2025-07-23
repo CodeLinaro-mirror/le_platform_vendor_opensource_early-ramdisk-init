@@ -586,10 +586,12 @@ static void preload_unit(unsigned char* type, char* name) {
 
 		for(i = 2; i < conf_num; i++){
 			char name_sub[150]={'\0'};
-			strlcpy(name_sub, name, strlen(name)+1);
+			strlcpy(name_sub, name, sizeof(name_sub));
+			if (strlen(name_sub) > 148)
+                            continue;
 			name_sub[strlen(name_sub)] = '/';
 			name_sub[strlen(name_sub)+1] = '\0';
-			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
+			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, sizeof(name_sub));
 
 			preload_unit(conf_list[i]->d_type, name_sub);
 		}
