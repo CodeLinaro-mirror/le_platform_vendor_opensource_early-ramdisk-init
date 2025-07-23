@@ -77,6 +77,7 @@ static char *module_get_abs_path(char *oldpath, int offset)
 	if(!kerversion) {
 		if((ret = uname(&u)) < 0) {
 			log_error("uname failed: %d\n", ret);
+			pthread_mutex_unlock(&path_lock);
 			return NULL;
 		}
 		kerversion = u.release;
@@ -84,6 +85,7 @@ static char *module_get_abs_path(char *oldpath, int offset)
 		if((len + strlen(kerversion) + 1) > PATH_PAD) {
 			log_error("kernel version too long!\n");
 			kerversion = NULL;
+			pthread_mutex_unlock(&path_lock);
 			return NULL;
 		}
 		memcpy(prefix_path + len, kerversion, strlen(kerversion));
