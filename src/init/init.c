@@ -191,7 +191,7 @@ static bool find_the_device(char* devname, char* token)
 	if (!probe)
 	{
 		log_kmsg("blkid_new_probe failed");
-		goto out;
+		goto probe_error;
 	}
 	blkid_probe_enable_superblocks(probe, 0);
 	blkid_probe_enable_partitions(probe, 1);
@@ -219,9 +219,10 @@ static bool find_the_device(char* devname, char* token)
 			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
 		ret = true;
 out:
+        safe_close(fd);
+probe_error:
 	if (probe)
 		blkid_free_probe(probe);
-	safe_close(fd);
 	return ret;
 }
 
