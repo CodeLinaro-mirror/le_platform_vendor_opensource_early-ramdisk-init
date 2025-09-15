@@ -191,7 +191,7 @@ static bool find_the_device(char* devname, char* token)
 	if (!probe)
 	{
 		log_kmsg("blkid_new_probe failed");
-		goto out;
+		goto probe_error;
 	}
 	blkid_probe_enable_superblocks(probe, 0);
 	blkid_probe_enable_partitions(probe, 1);
@@ -219,9 +219,10 @@ static bool find_the_device(char* devname, char* token)
 			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
 		ret = true;
 out:
+        safe_close(fd);
+probe_error:
 	if (probe)
 		blkid_free_probe(probe);
-	safe_close(fd);
 	return ret;
 }
 
@@ -289,7 +290,8 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		usleep(200);
 	}
 	// get a new verity table
-	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
+	if(dev_num)
+	    snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
 
 	return;
@@ -593,10 +595,12 @@ static void preload_unit(unsigned char* type, char* name) {
 
 		for(i = 2; i < conf_num; i++){
 			char name_sub[150]={'\0'};
-			strlcpy(name_sub, name, strlen(name)+1);
+			strlcpy(name_sub, name, sizeof(name_sub));
+			if (strlen(name_sub) > 148)
+                            continue;
 			name_sub[strlen(name_sub)] = '/';
 			name_sub[strlen(name_sub)+1] = '\0';
-			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
+			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, sizeof(name_sub));
 
 			preload_unit(conf_list[i]->d_type, name_sub);
 		}
