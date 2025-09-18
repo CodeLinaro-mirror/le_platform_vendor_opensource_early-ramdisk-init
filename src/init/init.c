@@ -261,14 +261,16 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 {
 	char *cmd_temp = cmd_partuuid;
 	int i=0,j=0;
-	char temp_all[CMD_MAX];
+	char temp_all[CMD_MAX] = {0};
 	char temp_partuuid[CMD_MAX];
 	char *dev_num = NULL;
 
+	temp_all[CMD_MAX - 1] = '\0';
 	for(i=0; i<3; i++)
 	{
 		cmd_temp = strchr(cmd_temp, ' ');
-
+		if(cmd_temp == NULL)
+			return;
 		if(i == 1){
 			for(j=0; ; j++){
 				temp_partuuid[j] = cmd_temp[j+1];
