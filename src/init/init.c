@@ -44,7 +44,7 @@
 #define DM_MAX_TARGETS			5
 
 //Put right system_* info here can save aroung ~60ms bootkpi
-static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
+static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*8", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
@@ -191,7 +191,7 @@ static bool find_the_device(char* devname, char* token)
 	if (!probe)
 	{
 		log_kmsg("blkid_new_probe failed");
-		goto out;
+		goto probe_error;
 	}
 	blkid_probe_enable_superblocks(probe, 0);
 	blkid_probe_enable_partitions(probe, 1);
@@ -219,9 +219,10 @@ static bool find_the_device(char* devname, char* token)
 			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
 		ret = true;
 out:
+        safe_close(fd);
+probe_error:
 	if (probe)
 		blkid_free_probe(probe);
-	safe_close(fd);
 	return ret;
 }
 
@@ -260,14 +261,16 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 {
 	char *cmd_temp = cmd_partuuid;
 	int i=0,j=0;
-	char temp_all[CMD_MAX];
+	char temp_all[CMD_MAX] = {0};
 	char temp_partuuid[CMD_MAX];
 	char *dev_num = NULL;
 
+	temp_all[CMD_MAX - 1] = '\0';
 	for(i=0; i<3; i++)
 	{
 		cmd_temp = strchr(cmd_temp, ' ');
-
+		if(cmd_temp == NULL)
+			return;
 		if(i == 1){
 			for(j=0; ; j++){
 				temp_partuuid[j] = cmd_temp[j+1];
@@ -280,9 +283,17 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		cmd_temp++;
 	}
 
-	dev_num = get_device_name(temp_partuuid);
+	for(i = 0; i < COND_CHECK_MAX; i++) {
+		dev_num = get_device_name(temp_partuuid);
+		if(dev_num){
+			log_kmsg("Wait for %s: %.1fms\n", dev_num, (i * 2) / 10.0);
+			break;
+		}
+		usleep(200);
+	}
 	// get a new verity table
-	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
+	if(dev_num)
+	    snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
 
 	return;
@@ -586,10 +597,12 @@ static void preload_unit(unsigned char* type, char* name) {
 
 		for(i = 2; i < conf_num; i++){
 			char name_sub[150]={'\0'};
-			strlcpy(name_sub, name, strlen(name)+1);
+			strlcpy(name_sub, name, sizeof(name_sub));
+			if (strlen(name_sub) > 148)
+                            continue;
 			name_sub[strlen(name_sub)] = '/';
 			name_sub[strlen(name_sub)+1] = '\0';
-			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
+			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, sizeof(name_sub));
 
 			preload_unit(conf_list[i]->d_type, name_sub);
 		}
@@ -885,12 +898,7 @@ int dm_create_roots(void *data)
 		sp = (struct dm_target_spec *)((char *)sp + strlen(cmd.dm.target_args_array[i]));
 	}
 
-	for(i = 0; i < COND_CHECK_MAX; i++) {
-		if((ret = ioctl(fd, DM_TABLE_LOAD, ctl)) == 0)
-			break;
-		usleep(200);
-	}
-
+	ret = ioctl(fd, DM_TABLE_LOAD, ctl);
 	if(ret) {
 		log_kmsg("Device mapper TABLE_LOAD failed: %d\n", ret);
 			goto load_fail;
