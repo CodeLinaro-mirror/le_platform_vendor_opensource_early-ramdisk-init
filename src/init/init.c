@@ -722,6 +722,88 @@ int main(int argc, char* argv[])
 	}
 #endif
 
+#ifdef LIB_UNIFICATION
+	pid = fork();
+	if(pid < 0) {
+		log_kmsg("error: fork process for lib unification fail\n");
+		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
+			log_kmsg("mount sysfs failed: %d\n", errno);
+		}
+		ret = mount("overlay", "/etc", "overlay", MS_NOATIME, "lowerdir=/etc:/uni/lemans/etc");
+		if(ret == -1) {
+			log_kmsg("mount lowerdir=/etc:/uni/lemans/etc error: %d\n", errno);
+		}
+		if(umount("/sys")) {
+			log_kmsg("umount sysfs failed: %d\n", errno);
+		}
+	}
+	else if(pid == 0) {
+		FILE *fp;
+		char buf[128];
+		char lower_dir[128];
+		const char *socid_name;
+		int soc_id;
+		char* socid_path = "/sys/devices/soc0/soc_id";
+		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
+			log_kmsg("mount sysfs failed: %d\n", errno);
+		}
+		fp = fopen(socid_path, "r");
+		if(fp == NULL) {
+			log_kmsg("error: can't open %s\n", socid_path);
+			soc_id = -1;
+		}
+		else {
+			if(fgets(buf, sizeof(buf), fp) != NULL) {
+				soc_id = atoi(buf);
+				log_kmsg("socid is %d\n", soc_id);
+			}
+			else {
+				log_kmsg("error: fgets() return NULL\n");
+				soc_id = -2;
+			}
+			fclose(fp);
+		}
+		switch (soc_id) {
+			case 532:
+			case 533:
+			case 534:
+			case 535:
+				socid_name = "lemans";
+				break;
+			case 606:
+			case 695:
+				socid_name = "monaco";
+				break;
+			default:
+				socid_name = NULL;
+				break;
+		}
+		if(socid_name == NULL) {
+			log_kmsg("socid error: no matching socid %d\n", soc_id);
+			ret = mount("overlay", "/etc", "overlay", MS_NOATIME, "lowerdir=/etc:/uni/lemans/etc");
+			if(ret == -1) {
+				log_kmsg("mount lowerdir=/etc:/uni/lemans/etc error: %d\n", errno);
+			}
+		}
+		else {
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/usr/lib:/uni/%s/usr/lib", socid_name);
+			ret = mount("overlay", "/usr/lib", "overlay", MS_NOATIME, lower_dir);
+			if(ret == -1) {
+				log_kmsg("mount %s error: %d\n", lower_dir, errno);
+			}
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/etc:/uni/%s/etc", socid_name);
+			ret = mount("overlay", "/etc", "overlay", MS_NOATIME, lower_dir);
+			if(ret == -1) {
+				log_kmsg("mount %s error: %d\n", lower_dir, errno);
+			}
+			log_kmsg("mount overlayfs %s done\n", socid_name);
+		}
+		if(umount("/sys")) {
+			log_kmsg("umount sysfs failed: %d\n", errno);
+		}
+	}
+#endif
+
 #ifdef VFIO_BIND_DEVICE
 	pid = fork();
 	if(pid < 0)
