@@ -732,12 +732,17 @@ int main(int argc, char* argv[])
 		for (int i = 0; i < 100; ++i) {
 			fd = access(vfio_name, F_OK);
 			if (fd < 0) {
-				log_kmsg("access path %s failed, errno %d\n", vfio_name, errno);
 				usleep(5000);
 			}
 			else
 				break;
 		}
+
+		if (fd < 0) {
+			log_kmsg("access path %s failed, errno %d\n", vfio_name, errno);
+			exit(EXIT_FAILURE);
+		}
+
 		log_kmsg("run vfio-device-bind.sh start\n");
 		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
 			log_kmsg("run vfio-device-bind.sh fail\n");
