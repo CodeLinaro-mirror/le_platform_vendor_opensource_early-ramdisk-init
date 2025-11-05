@@ -30,6 +30,8 @@ void log_kmsg(const char *format, ...);
 #define log_info(...) log_write(LOG_INFO, __VA_ARGS__)
 #define log_debug(...)
 
+char* get_slot_suffix(void);
+
 typedef int (*tasklet_func_t)(void *);
 
 struct tasklet {
@@ -48,6 +50,16 @@ struct tasklet {
 tasklet_func_t get_early_tasklet_from_string(char *name);
 tasklet_func_t get_late_tasklet_from_string(char *name);
 
+struct MountPoint {
+	const char *name;
+	const char *where;
+	const char *type;
+	unsigned long flags;
+	const char *options;
+};
+//extern struct MountPoint mount_table[16];
+char* get_device_name(const char* token);
+
 void inline safe_free(char** p)
 {
 	if (*p)
@@ -62,5 +74,8 @@ void inline safe_close(int fd)
 		close(fd);
 	return;
 }
+
+extern char machine_name[128];
+extern int soc_id;
 
 #endif

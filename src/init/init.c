@@ -30,10 +30,8 @@
 #define KPI_VALUE_PATH          "/sys/kernel/boot_kpi/kpi_values"
 #define LOG_PATH				LOG_DIR"/early_ramdisk_init.log"
 #define DM_DEVICE				"/dev/mapper/control"
-#define FIRMWARE_MOUNT_DIR			"/lib/firmware/qcom"
 
 #define MSG_LEN					128
-#define NAME_MAX				128
 #define DEFAULT_INIT			"/sbin/init"
 #define DEFAULT_FSTYPE			"ext4"
 #define LINE_MAX				2048
@@ -43,11 +41,6 @@
 #define FS_RW					1
 #define DM_BUF_LEN				1024
 #define DM_MAX_TARGETS			5
-
-//Put right system_* info here can save aroung ~60ms bootkpi
-static const char *rootfs_patterns[] = {"/dev/sd*42", "/dev/sd*8", "/dev/sd*22", "/dev/sd*6", "/dev/sd*4", "/dev/sd*", "/dev/mmcblk*p21", "/dev/mmcblk*"};
-
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
 struct rootfs_params {
 	char root[CMD_MAX];
@@ -80,34 +73,10 @@ struct cmd_params {
 
 static struct cmd_params cmd;
 
-struct MountPoint {
-	const char *name;
-	const char *where;
-	const char *type;
-	unsigned long flags;
-	const char *options;
-};
-
-struct MountPoint mount_table[] = {
-#ifdef FIRMWARE_MOUNT
-	// Legacy mount dir is /firmware. In later patches we may remove support
-	// of mounting modem to /firmware from early ramdisk
-	{"PARTLABEL=modem_a", "/firmware", "vfat", 0, ""},
-	{"PARTLABEL=modem_b", "/firmware", "vfat", 0, ""},
-	// New mount dir which conforms with Linux kernel's firmware search paths
-	{"PARTLABEL=modem_a", FIRMWARE_MOUNT_DIR, "vfat", 0, ""},
-	{"PARTLABEL=modem_b", FIRMWARE_MOUNT_DIR, "vfat", 0, ""},
-#endif
-
-#ifdef VENDOR_DSP_MOUNT
-	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
-	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
-#endif
-};
-
-// socinfo information
-static char machine_name[128] = {0};
-static int soc_id = -1;
+char *get_slot_suffix(void)
+{
+	return cmd.slot_suffix;
+}
 
 static void inline write_marker(const char* name)
 {
@@ -190,73 +159,6 @@ char *next_arg(char *args, char **param, char **val)
 
 	/* Chew up trailing spaces. */
 	return skip_spaces(args);
-}
-
-static bool find_the_device(char* devname, char* token)
-{
-	bool ret = false;
-	blkid_probe probe = blkid_new_probe();
-	if (!probe)
-	{
-		log_kmsg("blkid_new_probe failed");
-		goto probe_error;
-	}
-	blkid_probe_enable_superblocks(probe, 0);
-	blkid_probe_enable_partitions(probe, 1);
-	blkid_probe_set_partitions_flags(probe, BLKID_PARTS_ENTRY_DETAILS);
-	int fd = open(devname, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-	{
-		log_kmsg("open device %s failed, errno %d\n", devname, errno);
-		goto out;
-	}
-	blkid_probe_set_device(probe, fd, 0, 0);
-	int rc = blkid_do_safeprobe(probe);
-	if (rc)
-	{
-		log_kmsg("blkid_do_safeprobe failed");
-		goto out;
-	}
-	char* val;
-	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) &&
-			!blkid_probe_lookup_value (probe, "PART_ENTRY_UUID", &val, NULL) &&
-			!strncmp (val, (token + sizeof ("PARTUUID")), strlen(val)))
-		ret = true;
-	else if (!strncmp(token, "PARTLABEL", strlen("PARTLABEL")) &&
-			!blkid_probe_lookup_value (probe, "PART_ENTRY_NAME", &val, NULL) &&
-			!strncmp (val, (token + sizeof ("PARTLABEL")), strlen(val)))
-		ret = true;
-out:
-        safe_close(fd);
-probe_error:
-	if (probe)
-		blkid_free_probe(probe);
-	return ret;
-}
-
-static char* get_device_name(char* token)
-{
-	char* dev = NULL;
-	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) ||
-		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
-		glob_t block_device_list;
-
-		for (size_t  i = 0; i < (sizeof(rootfs_patterns)/sizeof(rootfs_patterns[0])); ++i)
-			glob(rootfs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
-		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
-			if (find_the_device(block_device_list.gl_pathv[i], token)) {
-				dev = strdup(block_device_list.gl_pathv[i]);
-				break;
-			}
-		}
-		globfree(&block_device_list);
-	}
-
-	if(!dev) {
-		//Slow path
-		dev = blkid_get_devname(NULL, token, NULL);
-	}
-	return dev;
 }
 
 /**
@@ -528,101 +430,9 @@ void mount_unsetup(void)
 	umount("/dev");
 }
 
-static void early_mount(void) {
-	log_kmsg("early_mount called\n");
-	pid_t pid;
-	pid = fork();
-	if(pid < 0)
-		log_kmsg("fork mount process failed\n");
-	else if(pid == 0) {
-		char* device = NULL;
-		char* device_name = "/dev/sde12";
-		int fd = 0;
-
-		for (int i = 0; i < 100; i++) {
-			fd = access(device_name, F_OK);
-			if (fd < 0) {
-				log_kmsg("access path %s failed, errno %d\n", device_name, errno);
-				usleep(5000);
-			}
-			else
-				break;
-		}
-
-		int mount_start = 0;
-		int retry_time = 0;
-		!strncmp(cmd.slot_suffix, "_a", strlen("_a")) ? (mount_start=0) : (mount_start=1);
-
-		for (int j = mount_start; j < ARRAY_SIZE(mount_table); j = j + 2) {
-			device = get_device_name(mount_table[j].name);
-			log_kmsg("Found the name %s, by device %s\n", mount_table[j].name, device);
-
-retry:
-			if (mount(device, mount_table[j].where, mount_table[j].type, mount_table[j].flags, mount_table[j].options)) {
-				log_kmsg("mount %s failed errno %d\n", mount_table[j].where, errno);
-#ifdef VENDOR_DSP_MOUNT
-				if ((errno == 22) && (retry_time < 100)) {
-					retry_time++;
-					usleep(5000);
-					goto retry;
-				}
-#endif
-			}
-			else
-				log_kmsg("mount %s success\n", mount_table[j].where);
-		}
-		exit(0);
-	}
-	return;
-}
-
-#ifdef PRELOAD_UNIT
-static void preload_unit(unsigned char* type, char* name) {
-	FILE *f;
-	char buff[1024];
-
-	if(type == DT_DIR) {
-		struct dirent **conf_list;
-		int conf_num;
-		int i = 0;
-
-		conf_num = scandir(name, &conf_list, NULL, alphasort);
-		if(conf_num < 0) {
-			log_error("preload %s scandir failed!\n", name);
-			free(conf_list);
-			return;
-		}
-
-		for(i = 2; i < conf_num; i++){
-			char name_sub[150]={'\0'};
-			strlcpy(name_sub, name, sizeof(name_sub));
-			if (strlen(name_sub) > 148)
-                            continue;
-			name_sub[strlen(name_sub)] = '/';
-			name_sub[strlen(name_sub)+1] = '\0';
-			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, sizeof(name_sub));
-
-			preload_unit(conf_list[i]->d_type, name_sub);
-		}
-
-	}
-
-	f = fopen(name, "r");
-	if(f == NULL) {
-		log_error("preload %s open failed!\n", name);
-		return;
-	}
-
-	fread(buff, 1, sizeof(buff), f);
-
-	fclose(f);
-
-	return;
-}
-#endif
-
 #ifdef LIB_UNIFICATION
-static int uni_overlayfs(char* path, char* machine, char* chip) {
+static int uni_overlayfs(char* path, char* machine, const char* chip)
+{
 	int ret = 0;
 	char lower_dir[128];
 
@@ -650,7 +460,8 @@ static int uni_overlayfs(char* path, char* machine, char* chip) {
 	return ret;
 }
 
-static int uni_bindfs(char* path, char* machine, char* chip) {
+static int uni_bindfs(char* path, char* machine, char* chip)
+{
 	int ret = 0;
 	char lower_dir[128];
 
@@ -764,6 +575,7 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
+	mount_unsetup();
 	if (mount("/realroot", "/", NULL, MS_MOVE, NULL) < 0) {
 		log_kmsg("failed to mount moving %s to /", "/realroot");
 		return -1;
@@ -780,16 +592,6 @@ int main(int argc, char* argv[])
 	}
 
 	late_tasklet_load(cmd.mode);
-
-#ifdef EARLY_INIT
-	pid = fork();
-	if(pid < 0)
-		log_kmsg("fork modules load process failed\n");
-	else if(pid == 0) {
-		execl("/usr/sbin/early_init", "/usr/sbin/early_init", NULL);
-		return 0;
-	}
-#endif
 
 #ifdef LIB_UNIFICATION
 	pid = fork();
@@ -847,105 +649,7 @@ int main(int argc, char* argv[])
 	}
 #endif
 
-#ifdef VFIO_BIND_DEVICE
-	pid = fork();
-	if(pid < 0)
-		log_kmsg("fork process for vfio bind device fail\n");
-	else if(pid == 0) {
-		char* vfio_name = "/sys/module/vfio";
-		int fd = 0;
-		for (int i = 0; i < 100; ++i) {
-			fd = access(vfio_name, F_OK);
-			if (fd < 0) {
-				usleep(5000);
-			}
-			else
-				break;
-		}
-
-		if (fd < 0) {
-			log_kmsg("access path %s failed, errno %d\n", vfio_name, errno);
-			exit(EXIT_FAILURE);
-		}
-
-		log_kmsg("run vfio-device-bind.sh start\n");
-		if (execl("/bin/sh", "sh", "/usr/bin/vfio-device-bind.sh", NULL) < 0)
-			log_kmsg("run vfio-device-bind.sh fail\n");
-
-		return 0;
-	}
-#endif
-
-#ifdef MM_VFIO_BIND_DEVICE
-	pid = fork();
-	if(pid < 0)
-		log_kmsg("fork process for mm vfio bind device fail\n");
-	else if(pid == 0) {
-		char* vfio_mm_name = "/sys/module/vfio";
-		int fd_mm = 0;
-		for (int i = 0; i < 100; ++i) {
-			fd_mm = access(vfio_mm_name, F_OK);
-			if (fd_mm < 0) {
-				log_kmsg("access path %s failed, errno %d\n", vfio_mm_name, errno);
-				usleep(5000);
-			}
-			else
-				break;
-		}
-		log_kmsg("run mm-vfio-device-bind.sh start\n");
-		if (execl("/bin/sh", "sh", "/usr/bin/mm-vfio-device-bind.sh", NULL) < 0)
-			log_kmsg("run mm-vfio-device-bind.sh fail\n");
-
-		return 0;
-	}
-#endif
-
-#ifdef PRELOAD_UNIT
-	pid = fork();
-	if(pid < 0)
-		log_kmsg("fork preload process failed\n");
-	else if(pid == 0) {
-		log_kmsg("created preload process\n");
-		struct dirent **conf_list;
-		int conf_num;
-		int ret = 0;
-		int j = 0;
-
-		char *load_path[] = {"/lib/systemd/system/", "/etc/systemd/system/"};
-
-		for (size_t  n = 0; n < (sizeof(load_path)/sizeof(load_path[0])); ++n) {
-			log_kmsg("preload units in %s\n", load_path[n]);
-			conf_num = scandir(load_path[n], &conf_list, NULL, alphasort);
-			if(conf_num < 0) {
-				log_error("%s preload scandir failed!\n", load_path[n]);
-				free(conf_list);
-				continue;
-			}
-
-			ret = chdir(load_path[n]);
-			if(ret) {
-				log_error("%s preload chdir failed!\n", load_path[n]);
-				free(conf_list);
-				continue;
-			}
-
-			for(j = 2; j < conf_num; j++){
-				preload_unit(conf_list[j]->d_type, conf_list[j]->d_name);
-			}
-		}
-
-		log_kmsg("finish preload files");
-
-		return 0;
-	}
-#endif
-
 	log_close();
-	mount_unsetup();
-
-#if defined(VENDOR_DSP_MOUNT) || defined(FIRMWARE_MOUNT)
-	early_mount();
-#endif
 
 	if(execl(cmd.rootfs.init, cmd.rootfs.init, NULL)) {
 		return errno;
@@ -1072,40 +776,3 @@ int rootfs_wait_func(void *data)
 }
 
 TASKLET_EARLY_CALL("wait_rootfs_tasklet", rootfs_wait_func);
-
-int fetch_socinfo(void *data)
-{
-	FILE *socinfo_fp = NULL;
-
-	socinfo_fp = fopen("/sys/devices/soc0/soc_id", "r");
-	if(socinfo_fp == NULL) {
-		log_kmsg("error: can't open /sys/devices/soc0/soc_id\n");
-	} else {
-		char buf[128];
-		if(fgets(buf, sizeof(buf), socinfo_fp) != NULL) {
-			soc_id = atoi(buf);
-			log_kmsg("socid is %d\n", soc_id);
-		} else {
-			log_kmsg("error: fgets() return NULL\n");
-		}
-		fclose(socinfo_fp);
-	}
-	socinfo_fp = fopen("/sys/devices/soc0/machine", "r");
-	if(socinfo_fp == NULL) {
-		log_kmsg("error: can't open /sys/devices/soc0/machine\n");
-	} else {
-		if(fgets(machine_name, sizeof(machine_name), socinfo_fp) != NULL) {
-			//Remove trailing newline if present
-			size_t len = strlen(machine_name);
-			if (len > 0 && machine_name[len-1] == '\n')
-				machine_name[len-1] = '\0';
-		} else {
-			log_kmsg("error: fgets() fetch machine return NULL\n");
-		}
-		fclose(socinfo_fp);
-		log_kmsg("machine is %s\n", machine_name);
-	}
-
-	return 0;
-}
-TASKLET_EARLY_CALL("fetch_socinfo_tasklet", fetch_socinfo);
