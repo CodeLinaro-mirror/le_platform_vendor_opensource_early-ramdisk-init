@@ -105,6 +105,10 @@ struct MountPoint mount_table[] = {
 #endif
 };
 
+// socinfo information
+static char machine_name[128] = {0};
+static int soc_id = -1;
+
 static void inline write_marker(const char* name)
 {
 	int fd = -1;
@@ -614,6 +618,64 @@ static void preload_unit(unsigned char* type, char* name) {
 }
 #endif
 
+#ifdef LIB_UNIFICATION
+static int uni_overlayfs(char* path, char* machine, char* chip) {
+	int ret = 0;
+	char lower_dir[128];
+
+	if (machine != NULL && machine[0] == '\0')
+		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s:%s", chip, path, path);
+	else if (chip != NULL && chip[0] == '\0') {
+		if (!strcmp(machine_name, "SA_QX_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hqx%s:%s", path, path);
+		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hgy%s:%s", path, path);
+	} else {
+		if (!strcmp(machine_name, "SA_QX_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hqx/%s%s:%s", chip, path, path);
+		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hgy/%s%s:%s", chip, path, path);
+	}
+
+	ret = mount("overlay", path, "overlay", MS_NOATIME, lower_dir);
+	if(0 != ret) {
+		log_kmsg("mount %s error: %d with lowerdir: %s\n", path, errno, lower_dir);
+	} else {
+		log_kmsg("mount %s overlayfs %s done\n", lower_dir, path);
+	}
+
+	return ret;
+}
+
+static int uni_bindfs(char* path, char* machine, char* chip) {
+	int ret = 0;
+	char lower_dir[128];
+
+	if (machine != NULL && machine[0] == '\0')
+		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s", chip, path);
+	else if (chip != NULL && chip[0] == '\0') {
+		if (!strcmp(machine_name, "SA_QX_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "/uni/hqx%s", path);
+		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "/uni/hgy%s", path);
+	} else {
+		if (!strcmp(machine_name, "SA_QX_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "/uni/hqx/%s%s", chip, path);
+		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
+			snprintf(lower_dir, sizeof(lower_dir), "/uni/hgy/%s%s", chip, path);
+	}
+
+	ret = mount(lower_dir, path, NULL, MS_BIND, NULL);
+	if(0 != ret) {
+		log_kmsg("bind %s error: %d with lowerdir: %s\n", path, errno, lower_dir);
+	} else {
+		log_kmsg("bind %s overlayfs %s done\n", lower_dir, path);
+	}
+
+	return ret;
+}
+#endif
+
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -738,10 +800,8 @@ int main(int argc, char* argv[])
 		}
 	}
 	else if(pid == 0) {
-		FILE *fp;
-		char buf[128];
-		char lower_dir[128];
 		const char *socid_name;
+<<<<<<< HEAD   (578349 Merge db423771208a3af5930754e7ebdee61c3b1b1b42 on remote bra)
 		int soc_id;
 		char* socid_path = "/sys/devices/soc0/soc_id";
 		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
@@ -763,6 +823,9 @@ int main(int argc, char* argv[])
 			}
 			fclose(fp);
 		}
+=======
+		/* translate socid_name */
+>>>>>>> CHANGE (20f20f early-ramdisk: read socinfo and run unification)
 		switch (soc_id) {
 			case 532:
 			case 533:
@@ -778,6 +841,7 @@ int main(int argc, char* argv[])
 				socid_name = NULL;
 				break;
 		}
+<<<<<<< HEAD   (578349 Merge db423771208a3af5930754e7ebdee61c3b1b1b42 on remote bra)
 		if(socid_name == NULL) {
 			log_kmsg("socid error: no matching socid %d\n", soc_id);
 			ret = mount("overlay", "/etc", "overlay", MS_NOATIME, "lowerdir=/etc:/uni/lemans/etc");
@@ -800,6 +864,27 @@ int main(int argc, char* argv[])
 		}
 		if(umount("/sys")) {
 			log_kmsg("umount sysfs failed: %d\n", errno);
+=======
+
+		// Handle overlay
+		if (!strcmp(machine_name, "SA_QX_VM") || !strcmp(machine_name, "SA_GUNYAH_VM")) {
+			//video overlayfs
+			uni_overlayfs("/usr/lib", "", socid_name);
+			uni_overlayfs("/etc", "", socid_name);
+
+			// security overlay
+			uni_overlayfs("/usr/bin", machine_name, "");
+			uni_overlayfs("/usr/lib", machine_name, "");
+
+			// common overlay
+			//uni_overlayfs("/usr/bin", machine_name, socid_name);
+			//uni_overlayfs("/usr/lib", machine_name, socid_name);
+			//uni_overlayfs("/etc", machine_name, socid_name);
+
+			// security driver load
+			uni_bindfs("/etc/modules-load.d/security_load.conf", machine_name, "");
+			uni_bindfs("/etc/fstab", machine_name, "");
+>>>>>>> CHANGE (20f20f early-ramdisk: read socinfo and run unification)
 		}
 	}
 #endif
@@ -1029,3 +1114,40 @@ int rootfs_wait_func(void *data)
 }
 
 TASKLET_DEFINE_CALL("wait_rootfs_tasklet", rootfs_wait_func);
+
+int fetch_socinfo(void *data)
+{
+	FILE *socinfo_fp = NULL;
+
+	socinfo_fp = fopen("/sys/devices/soc0/soc_id", "r");
+	if(socinfo_fp == NULL) {
+		log_kmsg("error: can't open /sys/devices/soc0/soc_id\n");
+	} else {
+		char buf[128];
+		if(fgets(buf, sizeof(buf), socinfo_fp) != NULL) {
+			soc_id = atoi(buf);
+			log_kmsg("socid is %d\n", soc_id);
+		} else {
+			log_kmsg("error: fgets() return NULL\n");
+		}
+		fclose(socinfo_fp);
+	}
+	socinfo_fp = fopen("/sys/devices/soc0/machine", "r");
+	if(socinfo_fp == NULL) {
+		log_kmsg("error: can't open /sys/devices/soc0/machine\n");
+	} else {
+		if(fgets(machine_name, sizeof(machine_name), socinfo_fp) != NULL) {
+			//Remove trailing newline if present
+			size_t len = strlen(machine_name);
+			if (len > 0 && machine_name[len-1] == '\n')
+				machine_name[len-1] = '\0';
+		} else {
+			log_kmsg("error: fgets() fetch machine return NULL\n");
+		}
+		fclose(socinfo_fp);
+		log_kmsg("machine is %s\n", machine_name);
+	}
+
+	return 0;
+}
+TASKLET_DEFINE_CALL("fetch_socinfo_tasklet", fetch_socinfo);
