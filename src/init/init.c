@@ -803,6 +803,8 @@ int main(int argc, char* argv[])
 		const char *socid_name;
 <<<<<<< HEAD   (578349 Merge db423771208a3af5930754e7ebdee61c3b1b1b42 on remote bra)
 		int soc_id;
+		char machine_name[128] = {0};
+
 		char* socid_path = "/sys/devices/soc0/soc_id";
 		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
 			log_kmsg("mount sysfs failed: %d\n", errno);
@@ -861,6 +863,35 @@ int main(int argc, char* argv[])
 				log_kmsg("mount %s error: %d\n", lower_dir, errno);
 			}
 			log_kmsg("mount overlayfs %s done\n", socid_name);
+		}
+
+		fp = fopen("/sys/devices/soc0/machine", "r");
+		if(fp == NULL) {
+			log_kmsg("error: can't open /sys/devices/soc0/machine\n");
+		} else {
+			if(fgets(machine_name, sizeof(machine_name), fp) != NULL) {
+				/* Remove trailing newline if present */
+				size_t len = strlen(machine_name);
+				if (len > 0 && machine_name[len-1] == '\n')
+					machine_name[len-1] = '\0';
+			}
+                        fclose(fp);
+			log_kmsg("machine is %s\n", machine_name);
+
+			/* mount fstab */
+			if (!strcmp(machine_name, "SA_QX_VM")) {
+                                ret = mount("/uni/hqx/etc/fstab", "/etc/fstab", NULL, MS_BIND, NULL);
+				if(ret == -1) {
+					log_kmsg("mount /uni/hqx/etc error: %d\n", errno);
+				}
+				log_kmsg("mount overlayfs HQX fstab done\n");
+			} else if (!strcmp(machine_name, "SA_GUNYAH_VM")) {
+                                ret = mount("/uni/hgy/etc/fstab", "/etc/fstab", NULL, MS_BIND, NULL);
+				if(ret == -1) {
+					log_kmsg("mount /uni/hgy/etc error: %d\n", errno);
+				}
+				log_kmsg("mount overlayfs HGY fstab done\n");
+			}
 		}
 		if(umount("/sys")) {
 			log_kmsg("umount sysfs failed: %d\n", errno);
