@@ -801,33 +801,7 @@ int main(int argc, char* argv[])
 	}
 	else if(pid == 0) {
 		const char *socid_name;
-<<<<<<< HEAD   (578349 Merge db423771208a3af5930754e7ebdee61c3b1b1b42 on remote bra)
-		int soc_id;
-		char machine_name[128] = {0};
-
-		char* socid_path = "/sys/devices/soc0/soc_id";
-		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
-			log_kmsg("mount sysfs failed: %d\n", errno);
-		}
-		fp = fopen(socid_path, "r");
-		if(fp == NULL) {
-			log_kmsg("error: can't open %s\n", socid_path);
-			soc_id = -1;
-		}
-		else {
-			if(fgets(buf, sizeof(buf), fp) != NULL) {
-				soc_id = atoi(buf);
-				log_kmsg("socid is %d\n", soc_id);
-			}
-			else {
-				log_kmsg("error: fgets() return NULL\n");
-				soc_id = -2;
-			}
-			fclose(fp);
-		}
-=======
 		/* translate socid_name */
->>>>>>> CHANGE (20f20f early-ramdisk: read socinfo and run unification)
 		switch (soc_id) {
 			case 532:
 			case 533:
@@ -843,59 +817,6 @@ int main(int argc, char* argv[])
 				socid_name = NULL;
 				break;
 		}
-<<<<<<< HEAD   (578349 Merge db423771208a3af5930754e7ebdee61c3b1b1b42 on remote bra)
-		if(socid_name == NULL) {
-			log_kmsg("socid error: no matching socid %d\n", soc_id);
-			ret = mount("overlay", "/etc", "overlay", MS_NOATIME, "lowerdir=/etc:/uni/lemans/etc");
-			if(ret == -1) {
-				log_kmsg("mount lowerdir=/etc:/uni/lemans/etc error: %d\n", errno);
-			}
-		}
-		else {
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/usr/lib:/uni/%s/usr/lib", socid_name);
-			ret = mount("overlay", "/usr/lib", "overlay", MS_NOATIME, lower_dir);
-			if(ret == -1) {
-				log_kmsg("mount %s error: %d\n", lower_dir, errno);
-			}
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/etc:/uni/%s/etc", socid_name);
-			ret = mount("overlay", "/etc", "overlay", MS_NOATIME, lower_dir);
-			if(ret == -1) {
-				log_kmsg("mount %s error: %d\n", lower_dir, errno);
-			}
-			log_kmsg("mount overlayfs %s done\n", socid_name);
-		}
-
-		fp = fopen("/sys/devices/soc0/machine", "r");
-		if(fp == NULL) {
-			log_kmsg("error: can't open /sys/devices/soc0/machine\n");
-		} else {
-			if(fgets(machine_name, sizeof(machine_name), fp) != NULL) {
-				/* Remove trailing newline if present */
-				size_t len = strlen(machine_name);
-				if (len > 0 && machine_name[len-1] == '\n')
-					machine_name[len-1] = '\0';
-			}
-                        fclose(fp);
-			log_kmsg("machine is %s\n", machine_name);
-
-			/* mount fstab */
-			if (!strcmp(machine_name, "SA_QX_VM")) {
-                                ret = mount("/uni/hqx/etc/fstab", "/etc/fstab", NULL, MS_BIND, NULL);
-				if(ret == -1) {
-					log_kmsg("mount /uni/hqx/etc error: %d\n", errno);
-				}
-				log_kmsg("mount overlayfs HQX fstab done\n");
-			} else if (!strcmp(machine_name, "SA_GUNYAH_VM")) {
-                                ret = mount("/uni/hgy/etc/fstab", "/etc/fstab", NULL, MS_BIND, NULL);
-				if(ret == -1) {
-					log_kmsg("mount /uni/hgy/etc error: %d\n", errno);
-				}
-				log_kmsg("mount overlayfs HGY fstab done\n");
-			}
-		}
-		if(umount("/sys")) {
-			log_kmsg("umount sysfs failed: %d\n", errno);
-=======
 
 		// Handle overlay
 		if (!strcmp(machine_name, "SA_QX_VM") || !strcmp(machine_name, "SA_GUNYAH_VM")) {
@@ -915,7 +836,6 @@ int main(int argc, char* argv[])
 			// security driver load
 			uni_bindfs("/etc/modules-load.d/security_load.conf", machine_name, "");
 			uni_bindfs("/etc/fstab", machine_name, "");
->>>>>>> CHANGE (20f20f early-ramdisk: read socinfo and run unification)
 		}
 	}
 #endif
