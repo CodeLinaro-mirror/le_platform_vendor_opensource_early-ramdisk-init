@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -37,11 +37,16 @@ struct tasklet {
 	tasklet_func_t func;
 };
 
-#define TASKLET_DEFINE_CALL(_name, _func) \
+#define TASKLET_EARLY_CALL(_name, _func) \
 	struct tasklet _func##_tasklet __attribute__((unused)) \
-	__attribute__((section(".data.tasklet"))) = { _name, _func};
+	__attribute__((section(".data.early.tasklet"))) = { _name, _func};
 
-tasklet_func_t get_tasklet_from_string(char *name);
+#define TASKLET_LATE_CALL(_name, _func) \
+	struct tasklet _func##_tasklet __attribute__((unused)) \
+	__attribute__((section(".data.late.tasklet"))) = { _name, _func};
+
+tasklet_func_t get_early_tasklet_from_string(char *name);
+tasklet_func_t get_late_tasklet_from_string(char *name);
 
 void inline safe_free(char** p)
 {

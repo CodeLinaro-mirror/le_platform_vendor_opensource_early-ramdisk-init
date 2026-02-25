@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <libkmod.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -26,10 +27,18 @@
 #include "thread_pool.h"
 
 #define streq(a, b) (strcmp((a), (b)) == 0)
-#define CONF_DIR_PATH		"/etc/modules-load.f"
+#define CONF_EARLY_DIR_PATH		"/etc/modules-load.f"
+#define CONF_LATE_DIR_PATH		"/etc/modules-load.l"
 #define MODULE_LINE_MAX			256
 #define PATH_PAD			128
 #define INIT_PATH_MAX			256
+#define EARLY_FAST_MODE		(0x1)
+#define LATE_FAST_MODE		(0x1 << 1)
+
+struct conf_load_buffer {
+	int len;
+	char *buffer;
+};
 
 static pthread_mutex_t path_lock;
 
@@ -261,7 +270,7 @@ static int module_run_tasklet(char *task)
 	}
 
 	strim(task_name);
-	func = get_tasklet_from_string(task_name);
+	func = get_early_tasklet_from_string(task_name);
 	if(!func) {
 		log_warn("Tasklet %s not found!\n", task_name);
 		return -EEXIST;
@@ -365,7 +374,7 @@ int fast_modules_load(int load_mode)
 	int ret = 0;
 	int ncpus = 1;
 
-	if(load_mode) {
+	if(load_mode & EARLY_FAST_MODE) {
 		ncpus = get_nprocs_conf();
 		if(ncpus <= 0) {
 			log_error("Can not get cpu numbers.\n");
@@ -386,15 +395,15 @@ int fast_modules_load(int load_mode)
 		goto thread_pool_fail;
 	}
 
-	conf_num = scandir(CONF_DIR_PATH, &conf_list, NULL, alphasort);
+	conf_num = scandir(CONF_EARLY_DIR_PATH, &conf_list, NULL, alphasort);
 	if(conf_num < 0) {
-		log_error("%s scandir failed!\n", CONF_DIR_PATH);
+		log_error("%s scandir failed!\n", CONF_EARLY_DIR_PATH);
 		goto conf_dir_error;
 	}
 
-	ret = chdir(CONF_DIR_PATH);
+	ret = chdir(CONF_EARLY_DIR_PATH);
 	if(ret) {
-		log_error("%s chdir failed\n", CONF_DIR_PATH);
+		log_error("%s chdir failed\n", CONF_EARLY_DIR_PATH);
 		goto chdir_error;
 	}
 
@@ -419,5 +428,183 @@ conf_dir_error:
 	pthread_mutex_destroy(&path_lock);
 thread_pool_fail:
 get_ncpu_fail:
+	return ret;
+}
+
+static int late_tasklet_run(char *task, int load_mode)
+{
+	int status = 0;
+	int ret = 0;
+	char *task_name = task + 1;
+	tasklet_func_t func;
+	pid_t pid;
+
+	if(!task_name[0]) {
+		log_warn("Empty tasklet name!\n");
+		return -EINVAL;
+	}
+
+	strim(task_name);
+	func = get_late_tasklet_from_string(task_name);
+	if(!func) {
+		log_warn("Tasklet %s not found!\n", task_name);
+		return -EEXIST;
+	}
+
+	pid = fork();
+	if(pid < 0)
+		log_kmsg("fork mount process failed\n");
+	else if(pid == 0) {
+		log_info("Run tasklet: %s\n", task_name);
+
+		if(ret = unshare(CLONE_NEWNS)){
+			log_kmsg("Tasklet %s unshare failed: %d", task_name, errno);
+			exit(ret);
+		}
+		if(ret = mount_setup()){
+			log_kmsg("Tasklet %s tmpfs setup failed: %d", task_name, ret);
+			return ret;
+		}
+
+		ret = func(NULL);
+
+		mount_unsetup();
+		exit(ret);
+	}
+
+	if(!(load_mode & LATE_FAST_MODE))
+		waitpid(pid, &status, 0);
+
+	return 0;
+}
+
+int late_tasklet_load_conf(char *buffer, int load_mode)
+{
+	char *line;
+	char *saveptr;
+	int ret;
+
+	line = strtok_r(buffer, "\n", &saveptr);
+	for(; line != NULL; line = strtok_r(NULL, "\n", &saveptr)) {
+		strim(line);
+
+		switch(line[0]) {
+		case '@':
+			ret = late_tasklet_run(line, load_mode);
+			if(ret)
+				log_warn("Late run tasklet %s failed: %d\n", line, ret);
+			break;
+		default:
+			log_warn("Wrong format of %s!\n", line);
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static struct conf_load_buffer *late_conf_buf;
+static unsigned int late_conf_cnt;
+
+int late_tasklet_load(int load_mode)
+{
+	int i;
+	int ret = -ENOENT;
+	struct conf_load_buffer *conf_buf;
+
+	if(late_conf_cnt <=0) {
+		log_kmsg("Late tasklet empty\n");
+		return ret;
+	}
+
+	for(i = 0; i < late_conf_cnt; i++) {
+		conf_buf = &late_conf_buf[i];
+		if(!conf_buf || !conf_buf->buffer) {
+			log_kmsg("late tasklet %d is empty\n");
+			continue;
+		}
+		ret = late_tasklet_load_conf(conf_buf->buffer, load_mode);
+		if(ret)
+			log_warn("Late Run tasklet %d failed\n", i);
+		free(conf_buf->buffer);
+	}
+
+	free(late_conf_buf);
+
+	return ret;
+}
+
+static int late_tasklet_init_conf(char *conf_name,
+		struct conf_load_buffer *conf_buf)
+{
+	FILE *f;
+	int ret = 0, len;
+
+	f = fopen(conf_name, "r");
+	if(f == NULL) {
+		log_error("%s open failed!\n", conf_name);
+		return -ENOENT;
+	}
+
+	fseek(f, 0L, SEEK_END);
+	if((len = ftell(f)) <= 0) {
+		log_error("%s: Wrong Size!\n", conf_name);
+		fclose(f);
+		return -ENOENT;
+	}
+	rewind(f);
+
+	conf_buf->len = len + 1;
+	conf_buf->buffer = malloc(conf_buf->len);
+	if(!conf_buf) {
+		log_error("%s: Alloc buffer failed", conf_name);
+	} else {
+		memset(conf_buf->buffer, 0, conf_buf->len);
+		ret = fread(conf_buf->buffer, 1, len, f);
+	}
+
+	fclose(f);
+
+	return ret;
+}
+
+int late_tasklet_init(void)
+{
+	struct dirent **conf_list;
+	int ret = 0;
+	int i, conf_num;
+
+	conf_num = scandir(CONF_LATE_DIR_PATH, &conf_list, NULL, alphasort);
+	if(conf_num < 0) {
+		log_error("%s scandir failed!\n", CONF_LATE_DIR_PATH);
+		goto conf_dir_error;
+	}
+
+	ret = chdir(CONF_LATE_DIR_PATH);
+	if(ret) {
+		log_error("%s chdir failed\n", CONF_LATE_DIR_PATH);
+		goto chdir_error;
+	}
+
+	late_conf_cnt = conf_num - 2;
+	late_conf_buf = malloc(sizeof(struct conf_load_buffer) * late_conf_cnt);
+	if(!late_conf_buf) {
+		log_error("late tasklet init: Alloc conf_load_buffer failed");
+		goto chdir_error;
+	}
+	memset(late_conf_buf, 0, sizeof(struct conf_load_buffer) * late_conf_cnt);
+
+	for(i = 2; i < conf_num; i++){
+		if(conf_list[i]->d_type != DT_REG) {
+			log_error("Unknow file type: %s\n", conf_list[i]->d_name);
+			continue;
+		}
+
+		ret = late_tasklet_init_conf(conf_list[i]->d_name, &late_conf_buf[i - 2]);
+	}
+
+chdir_error:
+	free(conf_list);
+conf_dir_error:
 	return ret;
 }
