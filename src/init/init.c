@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
@@ -493,13 +493,16 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 	return 0;
 }
 
-
-static int mount_setup(void)
+static int mount_logfs(void)
 {
 	if(mount("tmpfs", LOG_DIR, "tmpfs", MS_NOSUID|MS_NODEV|MS_STRICTATIME,
-				"mode=755"))
+				"mode=755,size=2M"))
 		perror("mount LOG_DIR failed:");
+	return 0;
+}
 
+int mount_setup(void)
+{
 	if(mount("devtmpfs", "/dev", "devtmpfs", MS_SILENT, NULL)) {
 		perror("early-ramdisk-init: mount devtmpfs failed: ");
 		return errno;
@@ -518,7 +521,7 @@ static int mount_setup(void)
 	return 0;
 }
 
-static void mount_unsetup(void)
+void mount_unsetup(void)
 {
 	umount("/proc");
 	umount("/sys");
@@ -686,6 +689,7 @@ int main(int argc, char* argv[])
 	int flag = 0;
 	pid_t pid = -1;
 
+	mount_logfs();
 	if(ret = mount_setup())
 		return ret;
 
@@ -707,6 +711,7 @@ int main(int argc, char* argv[])
 	fast_modules_load(cmd.mode);
 	write_marker("E - early-ramdisk modules done");
 	log_kmsg("load modules done\n");
+	late_tasklet_init();
 
 	if(cmd.rootfs.root_alias) {
 		ret = rootfs_alias_setup(&cmd.rootfs);
@@ -773,6 +778,8 @@ int main(int argc, char* argv[])
 		log_kmsg("cannot change directory to %s", "/");
 		return -1;
 	}
+
+	late_tasklet_load(cmd.mode);
 
 #ifdef EARLY_INIT
 	pid = fork();
@@ -1039,7 +1046,7 @@ create_fail:
 	free(dm_buffer);
 	return ret;
 }
-TASKLET_DEFINE_CALL("dm_create_tasklet", dm_create_roots);
+TASKLET_EARLY_CALL("dm_create_tasklet", dm_create_roots);
 
 int rootfs_wait_func(void *data)
 {
@@ -1064,7 +1071,7 @@ int rootfs_wait_func(void *data)
 	return 0;
 }
 
-TASKLET_DEFINE_CALL("wait_rootfs_tasklet", rootfs_wait_func);
+TASKLET_EARLY_CALL("wait_rootfs_tasklet", rootfs_wait_func);
 
 int fetch_socinfo(void *data)
 {
@@ -1101,4 +1108,4 @@ int fetch_socinfo(void *data)
 
 	return 0;
 }
-TASKLET_DEFINE_CALL("fetch_socinfo_tasklet", fetch_socinfo);
+TASKLET_EARLY_CALL("fetch_socinfo_tasklet", fetch_socinfo);
