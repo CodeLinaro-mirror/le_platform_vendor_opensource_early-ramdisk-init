@@ -75,7 +75,4 @@ void inline safe_close(int fd)
 	return;
 }
 
-extern char machine_name[128];
-extern int soc_id;
-
 #endif

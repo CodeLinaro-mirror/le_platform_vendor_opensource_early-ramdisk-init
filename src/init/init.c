@@ -430,66 +430,6 @@ void mount_unsetup(void)
 	umount("/dev");
 }
 
-#ifdef LIB_UNIFICATION
-static int uni_overlayfs(char* path, char* machine, const char* chip)
-{
-	int ret = 0;
-	char lower_dir[128];
-
-	if (machine != NULL && machine[0] == '\0')
-		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s:%s", chip, path, path);
-	else if (chip != NULL && chip[0] == '\0') {
-		if (!strcmp(machine_name, "SA_QX_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hqx%s:%s", path, path);
-		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hgy%s:%s", path, path);
-	} else {
-		if (!strcmp(machine_name, "SA_QX_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hqx/%s%s:%s", chip, path, path);
-		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/hgy/%s%s:%s", chip, path, path);
-	}
-
-	ret = mount("overlay", path, "overlay", MS_NOATIME, lower_dir);
-	if(0 != ret) {
-		log_kmsg("mount %s error: %d with lowerdir: %s\n", path, errno, lower_dir);
-	} else {
-		log_kmsg("mount %s overlayfs %s done\n", lower_dir, path);
-	}
-
-	return ret;
-}
-
-static int uni_bindfs(char* path, char* machine, char* chip)
-{
-	int ret = 0;
-	char lower_dir[128];
-
-	if (machine != NULL && machine[0] == '\0')
-		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s", chip, path);
-	else if (chip != NULL && chip[0] == '\0') {
-		if (!strcmp(machine_name, "SA_QX_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "/uni/hqx%s", path);
-		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "/uni/hgy%s", path);
-	} else {
-		if (!strcmp(machine_name, "SA_QX_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "/uni/hqx/%s%s", chip, path);
-		else if (!strcmp(machine_name, "SA_GUNYAH_VM"))
-			snprintf(lower_dir, sizeof(lower_dir), "/uni/hgy/%s%s", chip, path);
-	}
-
-	ret = mount(lower_dir, path, NULL, MS_BIND, NULL);
-	if(0 != ret) {
-		log_kmsg("bind %s error: %d with lowerdir: %s\n", path, errno, lower_dir);
-	} else {
-		log_kmsg("bind %s overlayfs %s done\n", lower_dir, path);
-	}
-
-	return ret;
-}
-#endif
-
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -591,63 +531,10 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
+	if(ret = mount_setup())
+		log_kmsg("Realroot tmpfs setup failed: %d\n", ret);
+
 	late_tasklet_load(cmd.mode);
-
-#ifdef LIB_UNIFICATION
-	pid = fork();
-	if(pid < 0) {
-		log_kmsg("error: fork process for lib unification fail\n");
-		if(mount("sysfs", "/sys", "sysfs", MS_SILENT, NULL)) {
-			log_kmsg("mount sysfs failed: %d\n", errno);
-		}
-		ret = mount("overlay", "/etc", "overlay", MS_NOATIME, "lowerdir=/etc:/uni/lemans/etc");
-		if(ret == -1) {
-			log_kmsg("mount lowerdir=/etc:/uni/lemans/etc error: %d\n", errno);
-		}
-		if(umount("/sys")) {
-			log_kmsg("umount sysfs failed: %d\n", errno);
-		}
-	}
-	else if(pid == 0) {
-		const char *socid_name;
-		/* translate socid_name */
-		switch (soc_id) {
-			case 532:
-			case 533:
-			case 534:
-			case 535:
-				socid_name = "lemans";
-				break;
-			case 606:
-			case 695:
-				socid_name = "monaco";
-				break;
-			default:
-				socid_name = NULL;
-				break;
-		}
-
-		// Handle overlay
-		if (!strcmp(machine_name, "SA_QX_VM") || !strcmp(machine_name, "SA_GUNYAH_VM")) {
-			//video overlayfs
-			uni_overlayfs("/usr/lib", "", socid_name);
-			uni_overlayfs("/etc", "", socid_name);
-
-			// security overlay
-			uni_overlayfs("/usr/bin", machine_name, "");
-			uni_overlayfs("/usr/lib", machine_name, "");
-
-			// common overlay
-			//uni_overlayfs("/usr/bin", machine_name, socid_name);
-			//uni_overlayfs("/usr/lib", machine_name, socid_name);
-			//uni_overlayfs("/etc", machine_name, socid_name);
-
-			// security driver load
-			uni_bindfs("/etc/modules-load.d/security_load.conf", machine_name, "");
-			uni_bindfs("/etc/fstab", machine_name, "");
-		}
-	}
-#endif
 
 	log_close();
 
@@ -655,6 +542,7 @@ int main(int argc, char* argv[])
 		return errno;
 	}
 
+	mount_unsetup();
 	return 0;
 }
 
