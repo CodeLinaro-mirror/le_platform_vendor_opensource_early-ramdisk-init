@@ -397,6 +397,11 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 	const char fstype_str[] = "rootfstype";
 	const char mode_str[] = "early-ramdisk.mode";
 	const char slot_str[] = "androidboot.slot_suffix";
+#ifdef ENABLE_LE_VARIANT
+	const char systemd_env_str[] = "systemd.setenv";
+	const char slot_env_prefix[] = "SLOT_SUFFIX=";
+#endif
+
 	char mode[CMD_MAX] = {0};
 	char *buf = NULL;
 
@@ -443,8 +448,19 @@ static int rootfs_cmd_setup(struct cmd_params *cmd)
 				cmd->mode = 0;
 			}
 		}
-		if (!strcmp(param, slot_str) && val)
+
+#ifdef ENABLE_LE_VARIANT
+		if (!strcmp(param, systemd_env_str) && val) {
+		    if (strncmp(val, slot_env_prefix, strlen(slot_env_prefix)) == 0) {
+		        char *suffix_ptr = val + strlen(slot_env_prefix);
+		        ret = strlcpy(cmd->slot_suffix, suffix_ptr, strlen(suffix_ptr) + 1);
+		    }
+		}
+#else
+		if (!strcmp(param, slot_str) && val) {
 			ret = strlcpy(cmd->slot_suffix, val, strlen(val) + 1);
+		}
+#endif
 		if (!strcmp(param, "ro")) {
 			cmd->rootfs.flag |= MS_RDONLY;
 		}
