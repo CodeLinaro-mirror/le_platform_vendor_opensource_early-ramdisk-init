@@ -457,18 +457,8 @@ static int late_tasklet_run(char *task, int load_mode)
 	else if(pid == 0) {
 		log_info("Run tasklet: %s\n", task_name);
 
-		if(ret = unshare(CLONE_NEWNS)){
-			log_kmsg("Tasklet %s unshare failed: %d", task_name, errno);
-			exit(ret);
-		}
-		if(ret = mount_setup()){
-			log_kmsg("Tasklet %s tmpfs setup failed: %d", task_name, ret);
-			return ret;
-		}
-
 		ret = func(NULL);
 
-		mount_unsetup();
 		exit(ret);
 	}
 
