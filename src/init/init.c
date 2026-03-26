@@ -189,6 +189,8 @@ char *next_arg(char *args, char **param, char **val)
 static bool find_the_device(char* devname, char* token)
 {
 	bool ret = false;
+	int fd = -1;
+
 	blkid_probe probe = blkid_new_probe();
 	if (!probe)
 	{
@@ -198,7 +200,7 @@ static bool find_the_device(char* devname, char* token)
 	blkid_probe_enable_superblocks(probe, 0);
 	blkid_probe_enable_partitions(probe, 1);
 	blkid_probe_set_partitions_flags(probe, BLKID_PARTS_ENTRY_DETAILS);
-	int fd = open(devname, O_RDONLY | O_CLOEXEC);
+	fd = open(devname, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 	{
 		log_kmsg("open device %s failed, errno %d\n", devname, errno);
@@ -269,6 +271,8 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 	for(i=0; i<3; i++)
 	{
 		cmd_temp = strchr(cmd_temp, ' ');
+		if (cmd_temp == NULL)
+			return;
 
 		if(i == 1){
 			for(j=0; ; j++){
@@ -283,6 +287,8 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 	}
 
 	dev_num = get_device_name(temp_partuuid);
+	if (dev_num == NULL)
+		return;
 	// get a new verity table
 	snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
 	strlcpy(cmd_new, temp_all, strlen(temp_all)+1);
@@ -589,6 +595,8 @@ static void preload_unit(unsigned char* type, char* name) {
 		for(i = 2; i < conf_num; i++){
 			char name_sub[150]={'\0'};
 			strlcpy(name_sub, name, strlen(name)+1);
+			if (strlen(name_sub) > 148)
+				continue;
 			name_sub[strlen(name_sub)] = '/';
 			name_sub[strlen(name_sub)+1] = '\0';
 			strlcpy(name_sub + strlen(name_sub), conf_list[i]->d_name, strlen(conf_list[i]->d_name)+1);
