@@ -168,8 +168,8 @@ struct MountPoint mount_table[] = {
 #endif
 
 #ifdef VENDOR_DSP_MOUNT
-	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
-	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
+	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", MS_RDONLY, "context=system_u:object_r:dsp_file_t:s0"},
+	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", MS_RDONLY, "context=system_u:object_r:dsp_file_t:s0"},
 #endif
 };
 
