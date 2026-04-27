@@ -457,18 +457,8 @@ static int late_tasklet_run(char *task, int load_mode)
 	else if(pid == 0) {
 		log_info("Run tasklet: %s\n", task_name);
 
-		if(ret = unshare(CLONE_NEWNS)){
-			log_kmsg("Tasklet %s unshare failed: %d", task_name, errno);
-			exit(ret);
-		}
-		if(ret = mount_setup()){
-			log_kmsg("Tasklet %s tmpfs setup failed: %d", task_name, ret);
-			return ret;
-		}
-
 		ret = func(NULL);
 
-		mount_unsetup();
 		exit(ret);
 	}
 
@@ -482,7 +472,7 @@ int late_tasklet_load_conf(char *buffer, int load_mode)
 {
 	char *line;
 	char *saveptr;
-	int ret;
+	int ret = 0;
 
 	line = strtok_r(buffer, "\n", &saveptr);
 	for(; line != NULL; line = strtok_r(NULL, "\n", &saveptr)) {
@@ -537,8 +527,13 @@ int late_tasklet_load(int load_mode)
 static int late_tasklet_init_conf(char *conf_name,
 		struct conf_load_buffer *conf_buf)
 {
-	FILE *f;
-	int ret = 0, len;
+	FILE *f = NULL;
+	int ret = 0, len = 0;
+
+	if (!conf_name || !conf_buf) {
+		log_error("NULL pointer parameter!\n");
+		return -EINVAL;
+	}
 
 	f = fopen(conf_name, "r");
 	if(f == NULL) {
@@ -556,7 +551,7 @@ static int late_tasklet_init_conf(char *conf_name,
 
 	conf_buf->len = len + 1;
 	conf_buf->buffer = malloc(conf_buf->len);
-	if(!conf_buf) {
+	if(!conf_buf->buffer) {
 		log_error("%s: Alloc buffer failed", conf_name);
 	} else {
 		memset(conf_buf->buffer, 0, conf_buf->len);
