@@ -10,3 +10,5 @@ early_ramdisk_init_SOURCES += src/utils/thread_pool.c
 early_ramdisk_init_SOURCES += src/utils/strlcpy.c
 early_ramdisk_init_SOURCES += src/utils/log.c
 early_ramdisk_init_SOURCES += src/utils/tasklet.c
+early_ramdisk_init_SOURCES += src/utils/tasklet-lib.c
+early_ramdisk_init_SOURCES += src/utils/blkid.c
