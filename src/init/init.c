@@ -237,25 +237,39 @@ probe_error:
 static char* get_device_name(char* token)
 {
 	char* dev = NULL;
+
 	if (!strncmp(token, "PARTUUID", strlen("PARTUUID")) ||
 		!strncmp(token, "PARTLABEL", strlen("PARTLABEL"))) {
-		glob_t block_device_list;
+		for (int retry = 0; retry < COND_CHECK_MAX && !dev; ++retry) {
+			glob_t block_device_list = {0};
 
-		for (size_t  i = 0; i < (sizeof(rootfs_patterns)/sizeof(rootfs_patterns[0])); ++i)
-			glob(rootfs_patterns[i],i ? GLOB_APPEND : 0 , NULL, &block_device_list);
-		for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
-			if (find_the_device(block_device_list.gl_pathv[i], token)) {
-				dev = strdup(block_device_list.gl_pathv[i]);
-				break;
+			for (size_t pcount = 0; pcount < (sizeof(rootfs_patterns) / sizeof(rootfs_patterns[0])); ++pcount) {
+				glob(rootfs_patterns[pcount], pcount ? GLOB_APPEND : 0, NULL, &block_device_list);
 			}
+
+			//Find devices only after some device nodes appear.
+			if ((sizeof(rootfs_patterns) / sizeof(rootfs_patterns[0])) >= block_device_list.gl_pathc ){
+				globfree(&block_device_list);
+				usleep(200);
+				continue;
+			}
+
+			for (size_t i = 0; i < block_device_list.gl_pathc; ++i) {
+				const char *path = block_device_list.gl_pathv[i];
+				if (find_the_device((char *)path, token)) {
+					dev = strdup(path);
+					log_kmsg("Wait for %s: %.1fms\n", dev, (retry * 2) / 10.0);
+					break;
+				}
+			}
+			globfree(&block_device_list);
 		}
-		globfree(&block_device_list);
 	}
 
-	if(!dev) {
-		//Slow path
+	if (!dev) {
 		dev = blkid_get_devname(NULL, token, NULL);
 	}
+
 	return dev;
 }
 
@@ -291,14 +305,7 @@ static void dm_replace_partuuid_by_dev_num(char *cmd_partuuid, char cmd_new[])
 		cmd_temp++;
 	}
 
-	for(i = 0; i < COND_CHECK_MAX; i++) {
-		dev_num = get_device_name(temp_partuuid);
-		if(dev_num){
-			log_kmsg("Wait for %s: %.1fms\n", dev_num, (i * 2) / 10.0);
-			break;
-		}
-		usleep(200);
-	}
+	dev_num = get_device_name(temp_partuuid);
 	// get a new verity table
 	if(dev_num)
 	    snprintf(temp_all, CMD_MAX, "%c %s %s %s", cmd_partuuid[0], dev_num, dev_num, cmd_temp);
