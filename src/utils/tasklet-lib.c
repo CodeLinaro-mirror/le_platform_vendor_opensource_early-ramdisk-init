@@ -343,6 +343,9 @@ static int video_lib_unification_func(void *data)
 		case 695:
 			socid_name = "monaco";
 			break;
+		case 690:
+			socid_name = "nord";
+			break;
 		default:
 			socid_name = "unknown";
 			break;
