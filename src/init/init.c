@@ -623,6 +623,11 @@ static int uni_overlayfs(char* path, char* machine, char* chip) {
 	int ret = 0;
 	char lower_dir[128];
 
+	if (machine == NULL && chip == NULL) {
+		log_kmsg("uni_overlayfs: No any machinae or chip is given!!!\n");
+		return 0;
+	}
+
 	if (machine != NULL && machine[0] == '\0')
 		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s:%s", chip, path, path);
 	else if (chip != NULL && chip[0] == '\0') {
@@ -650,6 +655,11 @@ static int uni_overlayfs(char* path, char* machine, char* chip) {
 static int uni_bindfs(char* path, char* machine, char* chip) {
 	int ret = 0;
 	char lower_dir[128];
+
+	if (machine == NULL && chip == NULL) {
+		log_kmsg("uni_bindfs: No any machinae or chip is given!!!\n");
+		return 0;
+	}
 
 	if (machine != NULL && machine[0] == '\0')
 		snprintf(lower_dir, sizeof(lower_dir), "lowerdir=/uni/%s%s", chip, path);
@@ -814,7 +824,7 @@ int main(int argc, char* argv[])
 				socid_name = "monaco";
 				break;
 			default:
-				socid_name = NULL;
+				socid_name = "unknown";
 				break;
 		}
 
