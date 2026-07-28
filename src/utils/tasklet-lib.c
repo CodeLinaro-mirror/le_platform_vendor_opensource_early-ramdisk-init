@@ -168,8 +168,8 @@ struct MountPoint mount_table[] = {
 #endif
 
 #ifdef VENDOR_DSP_MOUNT
-	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
-	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", 0, "context=system_u:object_r:dsp_file_t:s0"},
+	{"PARTLABEL=dsp_a", "/vendor/dsp", "ext4", MS_RDONLY, "context=system_u:object_r:dsp_file_t:s0"},
+	{"PARTLABEL=dsp_b", "/vendor/dsp", "ext4", MS_RDONLY, "context=system_u:object_r:dsp_file_t:s0"},
 #endif
 };
 
@@ -342,6 +342,9 @@ static int video_lib_unification_func(void *data)
 		case 606:
 		case 695:
 			socid_name = "monaco";
+			break;
+		case 690:
+			socid_name = "nord";
 			break;
 		default:
 			socid_name = "unknown";
