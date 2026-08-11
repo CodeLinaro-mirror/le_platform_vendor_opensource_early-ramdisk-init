@@ -13,15 +13,15 @@
 
 #include "utils.h"
 
-extern struct tasklet __tasklet_early_start[];
-extern struct tasklet __tasklet_early_end[];
-extern struct tasklet __tasklet_late_start[];
-extern struct tasklet __tasklet_late_end[];
+extern const struct tasklet __tasklet_early_start[];
+extern const struct tasklet __tasklet_early_end[];
+extern const struct tasklet __tasklet_late_start[];
+extern const struct tasklet __tasklet_late_end[];
 
 static inline tasklet_func_t get_tasklet_from_string(char *name,
-		struct tasklet *task_start, struct tasklet *task_end)
+		const struct tasklet *task_start, const struct tasklet *task_end)
 {
-	struct tasklet *p;
+	const struct tasklet *p;
 	bool find = false;
 
 	for(p = task_start; p < task_end; p++) {

@@ -1,7 +1,8 @@
 
 # AM_CFLAGS = -static
 AM_CFLAGS = -I$(srcdir)/src/include
-AM_LDFLAGS = -T$(srcdir)/tasklet.lds
+# Preserve incoming toolchain hardening flags and append linker script.
+AM_LDFLAGS = $(LDFLAGS) -Wl,-T,$(srcdir)/tasklet.lds
 AUTOMAKE_OPTIONS = subdir-objects
 bin_PROGRAMS = early-ramdisk-init
 early_ramdisk_init_SOURCES = src/init/init.c

@@ -33,17 +33,17 @@ void log_kmsg(const char *format, ...);
 typedef int (*tasklet_func_t)(void *);
 
 struct tasklet {
-	char *name;
+	const char *name;
 	tasklet_func_t func;
 };
 
 #define TASKLET_EARLY_CALL(_name, _func) \
-	struct tasklet _func##_tasklet __attribute__((unused)) \
-	__attribute__((section(".data.early.tasklet"))) = { _name, _func};
+	const struct tasklet _func##_tasklet __attribute__((unused)) \
+	__attribute__((section("early_tasklet"))) = { _name, _func};
 
 #define TASKLET_LATE_CALL(_name, _func) \
-	struct tasklet _func##_tasklet __attribute__((unused)) \
-	__attribute__((section(".data.late.tasklet"))) = { _name, _func};
+	const struct tasklet _func##_tasklet __attribute__((unused)) \
+	__attribute__((section("late_tasklet"))) = { _name, _func};
 
 tasklet_func_t get_early_tasklet_from_string(char *name);
 tasklet_func_t get_late_tasklet_from_string(char *name);

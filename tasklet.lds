@@ -7,14 +7,16 @@ SECTIONS
 {
 	. = ALIGN(16);
 	__tasklet_early_start = .;
-	rodata.data.early.tasklet : {
-		KEEP(*(.data.early.tasklet))
+	early_tasklet : {
+		KEEP(*(early_tasklet))
 	}
 	__tasklet_early_end = .;
+
+	. = ALIGN(16);
 	__tasklet_late_start = .;
-	rodata.data.late.tasklet : {
-		KEEP(*(.data.late.tasklet))
+	late_tasklet : {
+		KEEP(*(late_tasklet))
 	}
 	__tasklet_late_end = .;
 }
-INSERT AFTER .rodata
+INSERT AFTER .data.rel.ro
