@@ -362,9 +362,9 @@ static int video_lib_unification_func(void *data)
 		uni_overlayfs("/usr/lib", machine_name, "");
 
 		// common overlay
-		//uni_overlayfs("/usr/bin", machine_name, socid_name);
-		//uni_overlayfs("/usr/lib", machine_name, socid_name);
-		//uni_overlayfs("/etc", machine_name, socid_name);
+		uni_overlayfs("/usr/bin", machine_name, socid_name);
+		uni_overlayfs("/usr/lib", machine_name, socid_name);
+		uni_overlayfs("/etc", machine_name, socid_name);
 
 		// security driver load
 		uni_bindfs("/etc/modules-load.d/security_load.conf", machine_name, "");
