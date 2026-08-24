@@ -1,4 +1,5 @@
 @vfio_bind_device_tasklet
 @mm_vfio_bind_device_tasklet
+@geni_modules_load_tasklet
 @preload_unit_tasklet
 @early_mount_tasklet
