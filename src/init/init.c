@@ -712,6 +712,48 @@ static int geni_modules_load_func(void *data)
 }
 #endif
 
+#ifdef OFFLINE_CPU
+static void offline_sliver_cpus(void)
+{
+    int fd;
+    const char *cpus[] = {
+        "/sys/devices/system/cpu/cpu4/online",
+        "/sys/devices/system/cpu/cpu5/online",
+        "/sys/devices/system/cpu/cpu6/online",
+        "/sys/devices/system/cpu/cpu7/online",
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(cpus); i++) {
+        fd = open(cpus[i], O_WRONLY);
+        if (fd >= 0) {
+            write(fd, "0", 1);
+            close(fd);
+        }
+		log_kmsg("offline cpu %d\n", i+4);
+    }
+}
+
+static void online_sliver_cpus(void)
+{
+    int fd;
+    const char *cpus[] = {
+        "/sys/devices/system/cpu/cpu4/online",
+        "/sys/devices/system/cpu/cpu5/online",
+        "/sys/devices/system/cpu/cpu6/online",
+        "/sys/devices/system/cpu/cpu7/online",
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(cpus); i++) {
+        fd = open(cpus[i], O_WRONLY);
+        if (fd >= 0) {
+            write(fd, "1", 1);
+            close(fd);
+        }
+		log_kmsg("online cpu %d\n", i+4);
+    }
+}
+#endif
+
 int main(int argc, char* argv[])
 {
 	int ret;
@@ -740,9 +782,17 @@ int main(int argc, char* argv[])
 	if(ret < 0)
 		return ret;
 
+#ifdef OFFLINE_CPU
+	offline_sliver_cpus();
+#endif
+
 	fast_modules_load(cmd.mode);
 	write_marker("E - early-ramdisk modules done");
 	log_kmsg("load modules done\n");
+
+#ifdef OFFLINE_CPU
+	online_sliver_cpus();
+#endif
 
 	if(cmd.rootfs.root_alias) {
 		ret = rootfs_alias_setup(&cmd.rootfs);
