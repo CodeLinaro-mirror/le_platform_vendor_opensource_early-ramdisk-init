@@ -16,6 +16,7 @@
 #include <blkid/blkid.h>
 #include <ctype.h>
 #include <glob.h>
+#include <libkmod.h>
 
 #include "utils.h"
 
@@ -29,10 +30,101 @@ static int early_init_func(void *data)
 }
 TASKLET_LATE_CALL("early_init_tasklet", early_init_func);
 
+static void wait_for_systemd_exec(void)
+{
+	char comm[32];
+	FILE *f;
+	int i;
+
+	for (i = 0; i < 500; i++) {        /* max 5s */
+		f = fopen("/proc/1/comm", "r");
+		if (f) {
+			memset(comm, 0, sizeof(comm));
+			if (fgets(comm, sizeof(comm), f) &&
+				strncmp(comm, "systemd", 7) == 0) {
+				fclose(f);
+				return;
+			}
+			fclose(f);
+		}
+		usleep(5000);                   /* 5ms */
+	}
+	log_kmsg("geni module load: timeout waiting for systemd exec\n");
+}
+
+static int geni_modules_load_func(void *data)
+{
+	/* Load immediately: fast probes with no IOMMU contention */
+	static const char *pre_exec[] = {
+		"qcom-geni-se",
+		"qcom_ccu_qup",
+	};
+	/* Load after systemd exec: gpi IOMMU probe must not race with execl() */
+	static const char *post_exec[] = {
+		"gpi",
+		"qcom_geni_serial",
+		"spi_geni_qcom",
+		"i2c-qcom-geni",
+	};
+	struct kmod_ctx *ctx;
+	struct kmod_module *mod;
+	unsigned int i;
+	int ret;
+
+	ctx = kmod_new(NULL, NULL);
+	if(!ctx) {
+		log_kmsg("geni module load: kmod_new failed\n");
+		return 0;
+	}
+	kmod_load_resources(ctx);
+
+	for(i = 0; i < ARRAY_SIZE(pre_exec); i++) {
+		ret = kmod_module_new_from_name(ctx, pre_exec[i], &mod);
+		if(ret) {
+			log_kmsg("geni module load: lookup %s failed: %d\n", pre_exec[i], ret);
+			continue;
+		}
+
+		ret = kmod_module_probe_insert_module(mod, KMOD_PROBE_APPLY_BLACKLIST,
+				NULL, NULL, NULL, NULL);
+		if(ret < 0)
+			log_kmsg("geni module load: probe insert %s failed: %d\n", pre_exec[i], ret);
+		else
+			log_kmsg("geni module load: %s loaded\n", pre_exec[i]);
+
+		kmod_module_unref(mod);
+	}
+
+	wait_for_systemd_exec();
+
+	for(i = 0; i < ARRAY_SIZE(post_exec); i++) {
+		ret = kmod_module_new_from_name(ctx, post_exec[i], &mod);
+		if(ret) {
+			log_kmsg("geni module load: lookup %s failed: %d\n", post_exec[i], ret);
+			continue;
+		}
+
+		ret = kmod_module_probe_insert_module(mod, KMOD_PROBE_APPLY_BLACKLIST,
+				NULL, NULL, NULL, NULL);
+		if(ret < 0)
+			log_kmsg("geni module load: probe insert %s failed: %d\n", post_exec[i], ret);
+		else
+			log_kmsg("geni module load: %s loaded\n", post_exec[i]);
+
+		kmod_module_unref(mod);
+	}
+
+	kmod_unref(ctx);
+
+	return 0;
+}
+TASKLET_LATE_CALL("geni_modules_load_tasklet", geni_modules_load_func);
+
 static int vfio_bind_device_func(void *data)
 {
 	char* vfio_name = "/sys/module/vfio";
 	int fd = 0;
+
 	for (int i = 0; i < 100; ++i) {
 		fd = access(vfio_name, F_OK);
 		if (fd < 0) {
@@ -362,9 +454,9 @@ static int video_lib_unification_func(void *data)
 		uni_overlayfs("/usr/lib", machine_name, "");
 
 		// common overlay
-		//uni_overlayfs("/usr/bin", machine_name, socid_name);
-		//uni_overlayfs("/usr/lib", machine_name, socid_name);
-		//uni_overlayfs("/etc", machine_name, socid_name);
+		uni_overlayfs("/usr/bin", machine_name, socid_name);
+		uni_overlayfs("/usr/lib", machine_name, socid_name);
+		uni_overlayfs("/etc", machine_name, socid_name);
 
 		// security driver load
 		uni_bindfs("/etc/modules-load.d/security_load.conf", machine_name, "");
