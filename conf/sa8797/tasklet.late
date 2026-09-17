@@ -1,5 +1,6 @@
-@vfio_bind_device_tasklet
 @mm_vfio_bind_device_tasklet
+@scan_luns_tasklet
 @geni_modules_load_tasklet
+@vfio_bind_device_tasklet
 @preload_unit_tasklet
-@early_mount_tasklet
+@early_mount_fast_tasklet

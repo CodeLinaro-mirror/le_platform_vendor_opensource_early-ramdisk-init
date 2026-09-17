@@ -383,7 +383,17 @@ static int rootfs_alias_setup(struct rootfs_params *rootfs)
 {
 	char *root_dev = NULL;
 
-	root_dev = get_device_name(rootfs->root);
+	/*
+	 * Fast path: a PARTLABEL= root resolves directly from sysfs PARTNAME
+	 * (no blkid, no UFS reads). For PARTUUID= (bootloader-appended) sysfs
+	 * returns NULL and we fall through to get_device_name(); by the time
+	 * this runs, scan_root_lun() has already waited for the root LUN's GPT
+	 * to be parsed, so that call hits the page cache and resolves on the
+	 * first attempt instead of storming the blkid slow path.
+	 */
+	root_dev = resolve_partition_sysfs(rootfs->root);
+	if (!root_dev)
+		root_dev = get_device_name(rootfs->root);
 	if(!root_dev) {
 		log_kmsg("Can't find rootfs device: %s\n", rootfs->root);
 		return -EINVAL;
