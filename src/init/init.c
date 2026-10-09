@@ -42,6 +42,8 @@
 #define DM_BUF_LEN				1024
 #define DM_MAX_TARGETS			5
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
+
 struct rootfs_params {
 	char root[CMD_MAX];
 	char fstype[CMD_MAX];
