@@ -59,6 +59,7 @@ struct MountPoint {
 };
 //extern struct MountPoint mount_table[16];
 char* get_device_name(const char* token);
+char *resolve_partition_sysfs(const char *token);
 
 void inline safe_free(char** p)
 {
