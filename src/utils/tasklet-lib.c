@@ -996,6 +996,54 @@ static int video_lib_unification_func(void *data)
 TASKLET_LATE_CALL("video_lib_unification_tasklet", video_lib_unification_func);
 
 /*
+ * wait_for_systemd_manager - block until systemd's manager_new() has run.
+ *
+ * Gate: /run/systemd/ directory exists.
+ * systemd creates this directory at the very start of manager_new(), which
+ * executes immediately after mount_setup() returns -- observable within ~1 ms
+ * of the "systemd running in system mode" log message.
+ *
+ * Why this gate:
+ *
+ * With scsi_mod.scan=manual, each write() to the SCSI host scan node is
+ * synchronous: the kernel completes the full LUN probe before returning.
+ * Eight writes therefore block the UFS command queue for ~65 ms.  Starting
+ * this burst during systemd's mount_setup() phase (config-file reads, cgroup
+ * setup, SELinux relabeling) causes I/O contention that stretches mount_setup
+ * from ~90 ms to ~137 ms.  Waiting until mount_setup is done eliminates that
+ * contention entirely.
+ *
+ * The ~65 ms burst then overlaps the early part of the unit-file-reading
+ * window (~42 ms overlap).  That overlap is largely harmless: preload_unit
+ * tasklet has already warmed the page cache for all unit files ~150 ms
+ * earlier, so actual sda8 I/O during unit reading is minimal and the small
+ * SCSI probe commands interleave efficiently with any remaining reads.
+ *
+ * Earlier gates that were tried and rejected:
+ *   enforce==1 (/sys/fs/selinux/enforce): fires while the SELinux subsystem
+ *   is loading the policy -- still inside the mount_setup window on this
+ *   platform, causing the same ~47 ms mount_setup regression.
+ *
+ *   /proc/1/attr/current != "kernel": fires even earlier, during SELinux
+ *   capability parsing, before the bulk of the policy-file I/O completes.
+ */
+static void wait_for_systemd_manager(void)
+{
+	int i;
+
+	for (i = 0; i < 400; i++) {		/* 400 × 5ms = 2s max */
+		if (access("/run/systemd", F_OK) == 0) {
+			if (i > 0)
+				log_kmsg("scan_all_luns: waited %dms for systemd manager init\n",
+					 i * 5);
+			return;
+		}
+		usleep(5000);				/* 5ms */
+	}
+	log_kmsg("scan_all_luns: systemd manager init wait timeout, proceeding\n");
+}
+
+/*
  * scan_luns_func - scan board-provided UFS data LUNs after rootfs is up.
  *
  * Non-Nord targets are unchanged because this tasklet returns without scanning
@@ -1020,6 +1068,8 @@ static int scan_luns_func(void *data)
 
 	if(!params.scan_luns[0])
 		return 0;
+
+	wait_for_systemd_manager();
 
 	ret = get_scsi_host(&params, host, sizeof(host));
 	if(ret) {
